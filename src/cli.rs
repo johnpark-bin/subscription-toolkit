@@ -12,6 +12,8 @@ use serde_json::Value;
 
 use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
+use crate::browser::cdp::CdpClient;
+use crate::browser::sync::{BrowserSyncOptions, sync_actions, verify_account};
 use crate::config::OAuthConfig;
 use crate::error::AppError;
 use crate::history::{self, HistoryFile};
@@ -127,6 +129,15 @@ pub enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
+    /// 브라우저 세션(CDP)으로 동기화를 실행합니다.
+    #[command(
+        help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+    )]
+    Browser {
+        /// 브라우저 하위 명령.
+        #[command(subcommand)]
+        command: BrowserCommand,
+    },
     /// 계획·확인·실행을 한 번에 수행합니다.
     #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
     Migrate {
@@ -209,6 +220,49 @@ pub enum AuthCommand {
         /// 로그아웃할 계정: source(원본) 또는 target(대상).
         #[arg(long, value_enum, hide_possible_values = true)]
         account: Account,
+    },
+}
+
+/// 브라우저 하위 명령.
+#[derive(Debug, Subcommand)]
+#[command(
+    help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+)]
+pub enum BrowserCommand {
+    /// DevTools에 연결해 로그인한 채널을 확인합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Check {
+        /// Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        port: u16,
+        /// 기대하는 채널 ID(지정하면 불일치 시 중단).
+        #[arg(long)]
+        expect_channel: Option<String>,
+    },
+    /// 저장된 계획을 브라우저 세션으로 실행합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Sync {
+        /// 실행할 데이터 유형: subscriptions, playlists, likes, all.
+        #[arg(value_enum, hide_possible_values = true)]
+        kind: PushKind,
+        /// 대상 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        port: u16,
+        /// 데이터 유형별 최대 액션 수.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 액션 사이 대기(ms).
+        #[arg(long, default_value_t = 3_000)]
+        delay_ms: u64,
+        /// 실제 쓰기 없이 예정만 출력합니다.
+        #[arg(long)]
+        dry_run: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
+        /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
+        #[arg(long)]
+        skip_account_check: bool,
     },
 }
 
@@ -340,6 +394,7 @@ async fn dispatch(cli: Cli) -> Result<i32, AppError> {
             yes,
         } => migrate_command(&paths, limit, budget, delay_ms, refresh, yes, write_cost).await,
         Command::Status { json } => status_command(&paths, json, write_cost).await,
+        Command::Browser { command } => browser_command(&paths, command).await,
         Command::Quota { command } => quota_command(&paths, command, write_cost).await,
         Command::History { command } => history_command(&paths, command, write_cost).await,
         Command::Purge { tokens, yes } => purge_command(&paths, tokens, yes),
@@ -796,6 +851,114 @@ async fn history_command(
                 plan.playlist_title,
                 plan.video_ids.len()
             );
+            Ok(0)
+        }
+    }
+}
+
+async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, AppError> {
+    match command {
+        BrowserCommand::Check {
+            port,
+            expect_channel,
+        } => {
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            let account = verify_account(&mut cdp, expect_channel.as_deref().unwrap_or("")).await?;
+            cdp.close().await;
+            println!(
+                "브라우저 확인: 채널 {} · 로그인됨 · 세션 {}",
+                account["channel_id"].as_str().unwrap_or("-"),
+                account["session_index"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| account["session_index"]
+                        .as_u64()
+                        .map(|value| value.to_string()))
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            Ok(0)
+        }
+        BrowserCommand::Sync {
+            kind,
+            port,
+            limit,
+            delay_ms,
+            dry_run,
+            yes,
+            skip_account_check,
+        } => {
+            let now = Utc::now();
+            let Some(plan) = load_plan(paths, now)? else {
+                return Err(AppError::Usage(
+                    "저장된 계획이 없습니다. `stk plan`을 먼저 실행하세요.".to_string(),
+                ));
+            };
+            let types = kind.data_types();
+            let actions: Vec<Action> = plan
+                .actions
+                .iter()
+                .filter(|action| types.contains(&action.kind.data_type()))
+                .cloned()
+                .collect();
+
+            let pending = {
+                let journal = Journal::open(paths, now)?;
+                actions
+                    .iter()
+                    .filter(|action| !journal.is_complete(&action.key))
+                    .count()
+            };
+            if pending == 0 {
+                println!("이미 완료되었습니다. 브라우저에서 실행할 작업이 없습니다.");
+                return Ok(0);
+            }
+
+            if dry_run {
+                println!(
+                    "브라우저 실행 예정: {pending}건 (유형별 상한 {}, 대기 {}ms)",
+                    limit
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "없음".to_string()),
+                    delay_ms
+                );
+                for action in actions.iter().take(10) {
+                    println!("- {}", action.key);
+                }
+                if pending > 10 {
+                    println!("- … 외 {}건", pending - 10);
+                }
+                return Ok(0);
+            }
+
+            let prompt = format!(
+                "브라우저 세션으로 쓰기 {pending}건을 실행합니다. 대상 계정 상태가 실제로 바뀝니다."
+            );
+            if !confirm(&prompt, yes)? {
+                eprintln!("취소했습니다.");
+                return Ok(0);
+            }
+
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                verify_account(&mut cdp, &plan.target.channel.id).await?;
+            }
+
+            let mut journal = Journal::open(paths, now)?;
+            let mut targets = plan.playlist_targets.clone();
+            let opts = BrowserSyncOptions {
+                delay: Duration::from_millis(delay_ms),
+                retry_base: Duration::from_secs(5),
+                limit,
+            };
+            let report =
+                sync_actions(&mut cdp, &actions, &mut journal, &mut targets, &opts, now).await?;
+            cdp.close().await;
+            print!("{}", report.render());
+            eprintln!("진행률은 `stk status`로 확인하고, 다음 실행은 같은 명령을 반복하면 됩니다.");
             Ok(0)
         }
     }

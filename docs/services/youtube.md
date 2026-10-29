@@ -147,7 +147,17 @@ stk quota sync --used <콘솔값> --budget 9500 --write-cost 50
 
 오류별 중단·건너뜀·재시도 규칙은 [이전 요구사항](../youtube-migration-requirements.md#6-오류-매핑)을 따른다.
 
-## 6. 자동화
+## 6. 브라우저 세션 실행(선택)
+
+OAuth API를 쓰지 않고, 사용자가 로그인한 Chrome에 CDP로 붙어 동기화를 실행할 수 있다. 계획·journal은 기존 경로와 공유하지만 요청은 브라우저 페이지에서 실행된다. 준비 절차, 약관·계정 위험, 제약은 [브라우저 세션 실행](../browser-mode.md)을 따른다.
+
+```bash
+stk browser check --port 9222
+stk browser sync subscriptions --port 9222 --dry-run
+stk browser sync subscriptions --port 9222 --limit 20 --yes
+```
+
+## 7. 자동화
 
 여러 날 반복 실행을 스케줄러에 맡기는 방법은 [무인 반복 실행](../automation.md)을 따른다.
 
