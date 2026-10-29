@@ -8,8 +8,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use wiremock::{MockServer, Request, Respond, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
+use subscription_toolkit::account::Account;
 use subscription_toolkit::auth::{StaticTokenSource, TokenSource};
 use subscription_toolkit::error::AppError;
 use subscription_toolkit::migrate::executor::{ExecOptions, Executor, ExecutorDeps, RunSummary};
@@ -542,5 +543,334 @@ pub fn empty_target(channel_id: &str) -> TargetState {
         playlist_summaries: Vec::new(),
         playlist_items: std::collections::HashMap::new(),
         liked_ids: std::collections::HashSet::new(),
+    }
+}
+
+/// CLI 종단간 테스트용 가짜 YouTube 서버.
+pub struct MockYouTube {
+    state: std::sync::Mutex<MockState>,
+}
+
+#[derive(Default)]
+struct MockState {
+    source: MockAccount,
+    target: MockAccount,
+}
+
+#[derive(Default)]
+struct MockAccount {
+    channel: Option<ChannelInfo>,
+    subscriptions: Vec<String>,
+    playlists: Vec<PlaylistSummary>,
+    items: std::collections::HashMap<String, Vec<PlaylistItemRef>>,
+    likes: Vec<String>,
+    created: u32,
+    next_item: u32,
+    subscription_inserts: usize,
+    created_playlists: usize,
+}
+
+impl MockYouTube {
+    /// 원본/대상 채널을 갖춘 서버 상태를 만든다.
+    pub fn new() -> std::sync::Arc<Self> {
+        let mock = Self {
+            state: std::sync::Mutex::new(MockState {
+                source: MockAccount {
+                    channel: Some(ChannelInfo {
+                        id: "UC_SRC".to_string(),
+                        title: "원본 채널".to_string(),
+                    }),
+                    ..MockAccount::default()
+                },
+                target: MockAccount {
+                    channel: Some(ChannelInfo {
+                        id: "UC_DST".to_string(),
+                        title: "대상 채널".to_string(),
+                    }),
+                    ..MockAccount::default()
+                },
+            }),
+        };
+        std::sync::Arc::new(mock)
+    }
+
+    /// mock 서버에 모든 요청을 이 상태로 연결한다.
+    pub async fn mount(self: &std::sync::Arc<Self>, server: &MockServer) {
+        let mock = std::sync::Arc::clone(self);
+        Mock::given(wiremock::matchers::any())
+            .respond_with(move |request: &Request| mock.respond(request))
+            .mount(server)
+            .await;
+    }
+
+    fn account(&self, request: &Request) -> Option<&std::sync::Mutex<MockState>> {
+        let _ = request;
+        Some(&self.state)
+    }
+
+    /// 구독을 미리 넣는다.
+    pub fn add_subscription(&self, account: Account, channel_id: &str) {
+        let mut state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &mut state.source,
+            Account::Target => &mut state.target,
+        };
+        target.subscriptions.push(channel_id.to_string());
+    }
+
+    /// 구독 목록.
+    pub fn subscriptions(&self, account: Account) -> Vec<String> {
+        let state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &state.source,
+            Account::Target => &state.target,
+        };
+        target.subscriptions.clone()
+    }
+
+    /// 구독 insert 성공 횟수.
+    pub fn subscription_inserts(&self, account: Account) -> usize {
+        let state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &state.source,
+            Account::Target => &state.target,
+        };
+        target.subscription_inserts
+    }
+
+    /// 플레이리스트를 미리 넣는다.
+    pub fn add_playlist(&self, account: Account, id: &str, title: &str, video_ids: &[&str]) {
+        let mut state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &mut state.source,
+            Account::Target => &mut state.target,
+        };
+        let items = video_ids
+            .iter()
+            .enumerate()
+            .map(|(index, video_id)| PlaylistItemRef {
+                item_id: format!("PI_{id}_{index}"),
+                video_id: (*video_id).to_string(),
+                title: format!("영상 {video_id}"),
+                position: index as u64,
+            })
+            .collect();
+        target.playlists.push(PlaylistSummary {
+            id: id.to_string(),
+            title: title.to_string(),
+            description: String::new(),
+            privacy: Privacy::Private,
+            item_count: video_ids.len() as u64,
+        });
+        target.items.insert(id.to_string(), items);
+    }
+
+    /// 생성된 플레이리스트 수.
+    pub fn created_playlists(&self, account: Account) -> usize {
+        let state = self.state.lock().expect("잠금");
+        match account {
+            Account::Source => state.source.created_playlists,
+            Account::Target => state.target.created_playlists,
+        }
+    }
+
+    /// 플레이리스트 항목 영상 ID.
+    pub fn playlist_items(&self, account: Account, playlist_id: &str) -> Vec<String> {
+        let state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &state.source,
+            Account::Target => &state.target,
+        };
+        target
+            .items
+            .get(playlist_id)
+            .map(|items| items.iter().map(|item| item.video_id.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// 플레이리스트 ID 목록.
+    pub fn playlist_ids(&self, account: Account) -> Vec<String> {
+        let state = self.state.lock().expect("잠금");
+        let target = match account {
+            Account::Source => &state.source,
+            Account::Target => &state.target,
+        };
+        target
+            .playlists
+            .iter()
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    fn respond(&self, request: &Request) -> ResponseTemplate {
+        let bearer = request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .unwrap_or_default()
+            .to_string();
+        let is_source = match bearer.as_str() {
+            "source-token" => true,
+            "target-token" => false,
+            _ => {
+                return ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                    "error": {"code": 401, "message": "Invalid Credentials", "errors": [{"reason": "authError", "message": "Invalid Credentials"}]}
+                }));
+            }
+        };
+
+        let mut state = self.state.lock().expect("잠금");
+        let account = if is_source {
+            &mut state.source
+        } else {
+            &mut state.target
+        };
+
+        let path = request.url.path().trim_start_matches("/youtube/v3");
+        let method = request.method.as_str();
+
+        match (method, path) {
+            ("GET", "/channels") => {
+                let channel = account.channel.clone();
+                match channel {
+                    Some(channel) => ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "items": [{"id": channel.id, "snippet": {"title": channel.title}}]
+                    })),
+                    None => ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": []})),
+                }
+            }
+            ("GET", "/subscriptions") => {
+                let items: Vec<serde_json::Value> = account
+                    .subscriptions
+                    .iter()
+                    .map(|channel_id| {
+                        serde_json::json!({
+                            "snippet": {
+                                "title": format!("채널 {channel_id}"),
+                                "resourceId": {"kind": "youtube#channel", "channelId": channel_id}
+                            }
+                        })
+                    })
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": items}))
+            }
+            ("POST", "/subscriptions") => {
+                let body: serde_json::Value = request
+                    .body_json()
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let channel_id = body["snippet"]["resourceId"]["channelId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                account.subscriptions.push(channel_id);
+                account.subscription_inserts += 1;
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "new-subscription"}))
+            }
+            ("GET", "/playlists") => {
+                let items: Vec<serde_json::Value> = account
+                    .playlists
+                    .iter()
+                    .map(|playlist| {
+                        serde_json::json!({
+                            "id": playlist.id,
+                            "snippet": {"title": playlist.title, "description": playlist.description},
+                            "status": {"privacyStatus": playlist.privacy.api_status()},
+                            "contentDetails": {"itemCount": playlist.item_count}
+                        })
+                    })
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": items}))
+            }
+            ("POST", "/playlists") => {
+                let body: serde_json::Value = request
+                    .body_json()
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                account.created += 1;
+                let id = format!("PL_NEW_{}", account.created);
+                account.playlists.push(PlaylistSummary {
+                    id: id.clone(),
+                    title: body["snippet"]["title"].as_str().unwrap_or_default().to_string(),
+                    description: body["snippet"]["description"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    privacy: body["status"]["privacyStatus"]
+                        .as_str()
+                        .and_then(Privacy::from_api_status)
+                        .unwrap_or(Privacy::Private),
+                    item_count: 0,
+                });
+                account.items.insert(id.clone(), Vec::new());
+                account.created_playlists += 1;
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": id}))
+            }
+            ("GET", "/playlistItems") => {
+                let playlist_id = query_param(request, "playlistId").unwrap_or_default();
+                let mut items = account.items.get(&playlist_id).cloned().unwrap_or_default();
+                items.sort_by_key(|item| item.position);
+                let payload: Vec<serde_json::Value> = items
+                    .iter()
+                    .map(|item| {
+                        serde_json::json!({
+                            "id": item.item_id,
+                            "snippet": {
+                                "title": item.title,
+                                "position": item.position,
+                                "resourceId": {"kind": "youtube#video", "videoId": item.video_id}
+                            }
+                        })
+                    })
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": payload}))
+            }
+            ("POST", "/playlistItems") => {
+                let body: serde_json::Value = request
+                    .body_json()
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let playlist_id = body["snippet"]["playlistId"].as_str().unwrap_or_default().to_string();
+                let video_id = body["snippet"]["resourceId"]["videoId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                account.next_item += 1;
+                let item_id = format!("PI_NEW_{}", account.next_item);
+                let items = account.items.entry(playlist_id).or_default();
+                let position = items.len() as u64;
+                items.push(PlaylistItemRef {
+                    item_id,
+                    video_id: video_id.clone(),
+                    title: format!("영상 {video_id}"),
+                    position,
+                });
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "new-item"}))
+            }
+            ("PUT", "/playlistItems") => {
+                let body: serde_json::Value = request
+                    .body_json()
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let playlist_id = body["snippet"]["playlistId"].as_str().unwrap_or_default().to_string();
+                let video_id = body["snippet"]["resourceId"]["videoId"].as_str().unwrap_or_default().to_string();
+                let position = body["snippet"]["position"].as_u64().unwrap_or(0);
+                if let Some(items) = account.items.get_mut(&playlist_id)
+                    && let Some(item) = items.iter_mut().find(|item| item.video_id == video_id)
+                {
+                    item.position = position;
+                }
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "updated"}))
+            }
+            ("GET", "/videos") => {
+                let items: Vec<serde_json::Value> = account
+                    .likes
+                    .iter()
+                    .map(|video_id| serde_json::json!({"id": video_id, "snippet": {"title": format!("영상 {video_id}")}}))
+                    .collect();
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"items": items}))
+            }
+            ("POST", "/videos/rate") => ResponseTemplate::new(204),
+            _ => ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {"code": 404, "message": format!("unknown path {method} {path}"), "errors": [{"reason": "notFound"}]}
+            })),
+        }
     }
 }

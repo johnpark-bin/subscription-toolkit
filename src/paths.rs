@@ -1,7 +1,10 @@
 //! 실행 중 사용하는 파일 경로와 권한.
 
 use std::fs;
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+
+use fs2::FileExt;
 
 use crate::account::Account;
 use crate::error::AppError;
@@ -168,6 +171,43 @@ pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), AppError> {
             err,
         )
     })
+}
+
+/// 동시 실행을 막는 잠금 파일 핸들. 드롭되면 잠금이 풀린다.
+#[derive(Debug)]
+pub struct DataLock {
+    file: std::fs::File,
+}
+
+impl DataLock {
+    /// `<home>/data/.lock`에 배타 잠금을 건다.
+    pub fn acquire(paths: &Paths) -> Result<Self, AppError> {
+        paths.ensure_layout()?;
+        let path = paths.lock_file();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|err| {
+                AppError::io(
+                    format!("잠금 파일을 열 수 없습니다: {}", path.display()),
+                    err,
+                )
+            })?;
+        file.try_lock_exclusive().map_err(|_| {
+            AppError::Config(
+                "다른 stk 프로세스가 실행 중입니다. 끝난 뒤 다시 시도하세요.".to_string(),
+            )
+        })?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for DataLock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
 }
 
 #[cfg(unix)]
