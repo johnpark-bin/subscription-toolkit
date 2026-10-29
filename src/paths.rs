@@ -147,23 +147,27 @@ impl Paths {
         if let Some(parent) = path.parent() {
             self.ensure_dir(parent)?;
         }
-        let tmp = path.with_extension("tmp");
-        fs::write(&tmp, contents).map_err(|err| {
-            AppError::io(format!("파일을 쓸 수 없습니다: {}", tmp.display()), err)
-        })?;
-        restrict_mode(&tmp, 0o600).map_err(|err| {
-            AppError::io(
-                format!("파일 권한을 설정할 수 없습니다: {}", tmp.display()),
-                err,
-            )
-        })?;
-        fs::rename(&tmp, path).map_err(|err| {
-            AppError::io(
-                format!("파일을 교체할 수 없습니다: {}", path.display()),
-                err,
-            )
-        })
+        write_file_atomic(path, contents)
     }
+}
+
+/// 파일을 원자적으로 쓴다. 상위 디렉터리가 이미 있어야 한다.
+pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), AppError> {
+    let tmp = path.with_extension("tmp");
+    fs::write(&tmp, contents)
+        .map_err(|err| AppError::io(format!("파일을 쓸 수 없습니다: {}", tmp.display()), err))?;
+    restrict_mode(&tmp, 0o600).map_err(|err| {
+        AppError::io(
+            format!("파일 권한을 설정할 수 없습니다: {}", tmp.display()),
+            err,
+        )
+    })?;
+    fs::rename(&tmp, path).map_err(|err| {
+        AppError::io(
+            format!("파일을 교체할 수 없습니다: {}", path.display()),
+            err,
+        )
+    })
 }
 
 #[cfg(unix)]

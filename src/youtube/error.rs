@@ -61,4 +61,9 @@ impl ApiError {
     pub fn is_quota(&self) -> bool {
         matches!(self, Self::QuotaExceeded)
     }
+
+    /// 구독 한도(최대 구독 수) 도달 오류인지 여부.
+    pub fn is_subscription_limit(&self) -> bool {
+        matches!(self, Self::Forbidden(message) if message.contains("maximum number of subscriptions"))
+    }
 }
