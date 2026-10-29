@@ -76,7 +76,7 @@ Refs: #12
 - 하나의 커밋은 하나의 논리적 변경만 담는다. 리팩터링과 기능 추가를 섞지 않는다.
 - 동작 변경 커밋에는 그 동작을 검증하는 회귀 테스트를 함께 넣는다.
 - `WIP`, `fix`, `update` 같은 의미 없는 제목을 금지한다.
-- scope는 `auth`, `youtube`, `plan`, `executor`, `subscriptions`, `playlists`, `likes`, `history`, `cli`, `config`, `docs`, `ci` 중에서 고른다.
+- scope는 `auth`, `youtube`, `plan`, `executor`, `subscriptions`, `playlists`, `likes`, `history`, `cli`, `config`, `docs`, `ci`, `build` 중에서 고른다.
 
 예:
 
@@ -134,4 +134,7 @@ cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 cargo run -- --help
+
+scripts/build.sh --check                 # 검증 후 release 빌드
+scripts/build.sh --check --install       # ~/.local/bin/stk 설치
 ```
