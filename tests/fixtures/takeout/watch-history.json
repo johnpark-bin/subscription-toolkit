@@ -1,0 +1,132 @@
+[
+  {
+    "header": "YouTube",
+    "title": "Watched 영상 A",
+    "titleUrl": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    "subtitles": [
+      {
+        "name": "Channel A",
+        "url": "https://www.youtube.com/channel/UCAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    ],
+    "time": "2026-01-02T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched 영상 A",
+    "titleUrl": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+    "subtitles": [
+      {
+        "name": "Channel A",
+        "url": "https://www.youtube.com/channel/UCAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    ],
+    "time": "2026-01-05T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched 영상 B",
+    "titleUrl": "https://www.youtube.com/watch?v=bbbbbbbbbbb",
+    "subtitles": [
+      {
+        "name": "Channel B",
+        "url": "https://www.youtube.com/channel/UCBBBBBBBBBBBBBBBBBBBBBB"
+      }
+    ],
+    "time": "2026-01-10T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched 영상 C",
+    "titleUrl": "https://www.youtube.com/watch?v=ccccccccccc",
+    "subtitles": [
+      {
+        "name": "Channel A",
+        "url": "https://www.youtube.com/channel/UCAAAAAAAAAAAAAAAAAAAAAA"
+      }
+    ],
+    "time": "2026-02-01T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched a video that has been removed",
+    "time": "2026-02-02T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched 영상 D",
+    "titleUrl": "https://www.youtube.com/watch?v=ddddddddddd",
+    "subtitles": [
+      {
+        "name": "Channel D",
+        "url": "https://www.youtube.com/channel/UCDDDDDDDDDDDDDDDDDDDDDD"
+      }
+    ],
+    "time": "2026-02-03T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ],
+    "activityControls": [
+      "YouTube watch history"
+    ],
+    "details": [
+      {
+        "name": "From Google Ads"
+      }
+    ]
+  },
+  {
+    "header": "YouTube Music",
+    "title": "Watched 영상 E",
+    "titleUrl": "https://music.youtube.com/watch?v=eeeeeeeeeee",
+    "subtitles": [
+      {
+        "name": "Channel C",
+        "url": "https://www.youtube.com/channel/UCCCCCCCCCCCCCCCCCCCCCCC"
+      }
+    ],
+    "time": "2026-02-04T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ]
+  },
+  {
+    "header": "YouTube",
+    "title": "Watched 알 수 없는 영상",
+    "titleUrl": "https://example.com/x",
+    "time": "2026-02-05T00:00:00.000Z",
+    "products": [
+      "YouTube"
+    ]
+  }
+]
