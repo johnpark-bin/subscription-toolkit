@@ -286,9 +286,11 @@ pub struct QuotaEstimate {
 }
 
 /// 계획의 예상 쿼터를 계산한다.
-pub fn estimate_quota(plan: &Plan, budget: u64) -> QuotaEstimate {
+///
+/// `write_cost`는 쓰기 요청 하나의 단가다(기본 [`WRITE_QUOTA_UNIT`], 콘솔 실측으로 조정 가능).
+pub fn estimate_quota(plan: &Plan, budget: u64, write_cost: u64) -> QuotaEstimate {
     let write_actions = plan.actions.len() as u64;
-    let estimated_units = write_actions * WRITE_QUOTA_UNIT;
+    let estimated_units = write_actions * write_cost.max(1);
     let budget = budget.max(1);
     let estimated_days = if estimated_units == 0 {
         0
@@ -303,7 +305,7 @@ pub fn estimate_quota(plan: &Plan, budget: u64) -> QuotaEstimate {
 }
 
 /// `stk plan --json` 출력.
-pub fn summary_json(plan: &Plan, budget: u64) -> Value {
+pub fn summary_json(plan: &Plan, budget: u64, write_cost: u64) -> Value {
     let count = |predicate: fn(&ActionKind) -> bool| {
         plan.actions
             .iter()
@@ -346,7 +348,7 @@ pub fn summary_json(plan: &Plan, budget: u64) -> Value {
         .filter(|item| plan.target.liked_ids.contains(&item.video_id))
         .count();
 
-    let quota = estimate_quota(plan, budget);
+    let quota = estimate_quota(plan, budget, write_cost);
     json!({
         "source": {
             "channel_id": plan.source.channel.id,
@@ -639,7 +641,7 @@ mod tests {
             "중복 1건과 상한 초과분을 잘라낸다"
         );
 
-        let summary = summary_json(&plan, 9_500);
+        let summary = summary_json(&plan, 9_500, WRITE_QUOTA_UNIT);
         assert_eq!(summary["playlists"]["items_truncated"], json!(5));
     }
 
@@ -690,12 +692,12 @@ mod tests {
         );
         let plan = build_plan(&source, &target("UC_DST"), &all_types(), now()).expect("계획 실패");
 
-        let estimate = estimate_quota(&plan, 9_500);
+        let estimate = estimate_quota(&plan, 9_500, WRITE_QUOTA_UNIT);
         assert_eq!(estimate.write_actions, 2);
         assert_eq!(estimate.estimated_units, 100);
         assert_eq!(estimate.estimated_days, 1);
 
-        let summary = summary_json(&plan, 100);
+        let summary = summary_json(&plan, 100, WRITE_QUOTA_UNIT);
         assert_eq!(summary["quota"]["estimated_days"], json!(1));
         assert_eq!(summary["subscriptions"]["to_add"], json!(2));
         assert_eq!(summary["subscriptions"]["source"], json!(2));
