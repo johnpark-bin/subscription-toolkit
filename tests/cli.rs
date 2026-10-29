@@ -334,6 +334,130 @@ fn purge_tokens_removes_tokens() {
 }
 
 #[tokio::test]
+async fn quota_sync_and_show_reflect_console_values() {
+    let harness = Harness::start().await;
+    harness
+        .command()
+        .args([
+            "quota",
+            "sync",
+            "--used",
+            "4929",
+            "--budget",
+            "10000",
+            "--write-cost",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("쿼터 장부를 맞췄습니다"));
+
+    let output = harness
+        .command()
+        .args(["quota", "show", "--json"])
+        .output()
+        .expect("명령 실행 실패");
+    assert!(output.status.success());
+    let shown: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON 파싱 실패");
+    assert_eq!(shown["today"]["used"], 4929);
+    assert_eq!(shown["today"]["limit"], 10000);
+    assert_eq!(shown["today"]["write_cost"], 25);
+
+    harness
+        .command()
+        .args(["quota", "show"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("남은 쓰기 202건"))
+        .stdout(predicate::str::contains("10000 units"));
+
+    // plan과 push는 장부의 단가·예산을 그대로 이어받는다.
+    harness.mock.add_subscription(Account::Source, "UC_A");
+    let output = harness
+        .command()
+        .args(["plan", "--types", "subscriptions", "--json"])
+        .output()
+        .expect("명령 실행 실패");
+    let summary: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("JSON 파싱 실패");
+    assert_eq!(
+        summary["quota"]["estimated_units"], 25,
+        "단가 25로 계산한다"
+    );
+    assert_eq!(summary["quota"]["write_actions"], 1);
+}
+
+#[tokio::test]
+async fn status_reports_progress_and_requires_plan() {
+    let harness = Harness::start().await;
+
+    let output = harness
+        .command()
+        .args(["status"])
+        .output()
+        .expect("명령 실행 실패");
+    assert_eq!(output.status.code(), Some(2), "계획이 없으면 사용법 오류");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("stk plan"));
+
+    harness.mock.add_subscription(Account::Source, "UC_A");
+    harness.mock.add_subscription(Account::Source, "UC_B");
+    harness
+        .command()
+        .args(["plan", "--types", "subscriptions"])
+        .assert()
+        .success();
+
+    let output = harness
+        .command()
+        .args(["status", "--json"])
+        .output()
+        .expect("명령 실행 실패");
+    let before: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON 파싱 실패");
+    assert_eq!(before["total_actions"], 2);
+    assert_eq!(before["done_actions"], 0);
+    assert_eq!(before["pending_actions"], 2);
+
+    harness
+        .command()
+        .args(["push", "subscriptions", "--limit", "1", "--yes"])
+        .assert()
+        .success();
+
+    let output = harness
+        .command()
+        .args(["status", "--json"])
+        .output()
+        .expect("명령 실행 실패");
+    let after: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON 파싱 실패");
+    assert_eq!(after["done_actions"], 1);
+    assert_eq!(after["pending_actions"], 1);
+    assert_eq!(after["types"][0]["data_type"], "subscriptions");
+}
+
+#[tokio::test]
+async fn migrate_plans_and_runs_in_one_command() {
+    let harness = Harness::start().await;
+    harness.mock.add_subscription(Account::Source, "UC_A");
+
+    harness
+        .command()
+        .args(["migrate", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("구독: 성공 1"));
+    assert_eq!(harness.mock.subscription_inserts(Account::Target), 1);
+    assert!(harness.home().join("data").join("plan.json").exists());
+
+    harness
+        .command()
+        .args(["migrate", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("이미 완료"));
+    assert_eq!(harness.mock.subscription_inserts(Account::Target), 1);
+}
+
+#[tokio::test]
 async fn history_import_and_report_from_cli() {
     let harness = Harness::start().await;
     write_nested_takeout(harness.home());

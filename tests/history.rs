@@ -291,6 +291,7 @@ async fn history_playlist_creates_private_playlist_with_ordered_items() {
             limit: None,
             delay: std::time::Duration::ZERO,
             verify_order: true,
+            write_cost: subscription_toolkit::migrate::WRITE_QUOTA_UNIT,
         },
         targets,
         orders,

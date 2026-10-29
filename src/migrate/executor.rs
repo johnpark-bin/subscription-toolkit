@@ -24,6 +24,8 @@ pub struct ExecOptions {
     pub delay: Duration,
     /// 플레이리스트 순서 검증/보정 여부.
     pub verify_order: bool,
+    /// 쓰기 요청 하나의 쿼터 단가.
+    pub write_cost: u64,
 }
 
 impl Default for ExecOptions {
@@ -32,6 +34,7 @@ impl Default for ExecOptions {
             limit: None,
             delay: Duration::from_millis(200),
             verify_order: true,
+            write_cost: WRITE_QUOTA_UNIT,
         }
     }
 }
@@ -240,7 +243,7 @@ impl<'a> Executor<'a> {
             }
             let bar = &bars[&data_type];
 
-            self.deps.quota.reserve(WRITE_QUOTA_UNIT)?;
+            self.deps.quota.reserve(self.deps.opts.write_cost)?;
             *attempt_count += 1;
 
             match self.execute_action(action).await {
@@ -326,6 +329,7 @@ impl<'a> Executor<'a> {
                     &expected,
                     self.deps.quota,
                     self.deps.progress,
+                    self.deps.opts.write_cost,
                 )
                 .await?;
                 if let Some(warning) = &report.warning {

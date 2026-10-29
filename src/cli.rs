@@ -17,12 +17,13 @@ use crate::error::AppError;
 use crate::history::{self, HistoryFile};
 use crate::migrate::executor::{ExecOptions, Executor, ExecutorDeps};
 use crate::migrate::journal::Journal;
-use crate::migrate::model::{DataType, PushKind};
+use crate::migrate::model::{Action, DataType, PushKind};
 use crate::migrate::progress::ProgressReporter;
-use crate::migrate::quota::QuotaLedger;
+use crate::migrate::quota::{QuotaLedger, QuotaSnapshot};
+use crate::migrate::status::build_status;
 use crate::migrate::{
-    build_plan, estimate_quota, fetch_snapshot, fetch_target_state, is_snapshot_fresh,
-    load_or_collect_snapshot, load_plan, save_plan, save_snapshot, summary_json,
+    WRITE_QUOTA_UNIT, build_plan, estimate_quota, fetch_snapshot, fetch_target_state,
+    is_snapshot_fresh, load_or_collect_snapshot, load_plan, save_plan, save_snapshot, summary_json,
 };
 use crate::paths::{DataLock, Paths};
 use crate::youtube::YouTubeApi;
@@ -54,6 +55,9 @@ pub struct Cli {
     /// 경고 이상만 출력합니다.
     #[arg(long, global = true)]
     pub quiet: bool,
+    /// 쓰기 요청 하나의 쿼터 단가(기본: 장부 값, 없으면 50).
+    #[arg(long, global = true)]
+    pub write_cost: Option<u64>,
     /// 도움말을 출력합니다.
     #[arg(long, short = 'h', global = true, action = clap::ArgAction::Help)]
     pub help: Option<bool>,
@@ -104,9 +108,9 @@ pub enum Command {
         /// 데이터 유형별 최대 액션 수.
         #[arg(long)]
         limit: Option<usize>,
-        /// 오늘 사용할 쿼터 예산(units).
-        #[arg(long, default_value_t = DEFAULT_BUDGET)]
-        budget: u64,
+        /// 오늘 사용할 쿼터 예산(units). 기본: 장부 값 또는 9500.
+        #[arg(long)]
+        budget: Option<u64>,
         /// 쓰기 요청 사이 지연(ms).
         #[arg(long, default_value_t = DEFAULT_DELAY_MS)]
         delay_ms: u64,
@@ -122,6 +126,41 @@ pub enum Command {
         /// 시청기록 하위 명령.
         #[command(subcommand)]
         command: HistoryCommand,
+    },
+    /// 계획·확인·실행을 한 번에 수행합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Migrate {
+        /// 데이터 유형별 최대 액션 수.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 오늘 사용할 쿼터 예산(units). 기본: 장부 값 또는 9500.
+        #[arg(long)]
+        budget: Option<u64>,
+        /// 쓰기 요청 사이 지연(ms).
+        #[arg(long, default_value_t = DEFAULT_DELAY_MS)]
+        delay_ms: u64,
+        /// 원본 스냅샷 캐시를 무시하고 다시 읽습니다.
+        #[arg(long)]
+        refresh: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// 이전 진행률과 남은 일수를 보여줍니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Status {
+        /// JSON으로 출력합니다.
+        #[arg(long)]
+        json: bool,
+    },
+    /// 쿼터 장부를 조회하거나 콘솔 실측값으로 맞춥니다.
+    #[command(
+        help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+    )]
+    Quota {
+        /// 쿼터 하위 명령.
+        #[command(subcommand)]
+        command: QuotaCommand,
     },
     /// 저장한 API 데이터를 삭제합니다.
     #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
@@ -173,6 +212,34 @@ pub enum AuthCommand {
     },
 }
 
+/// 쿼터 하위 명령.
+#[derive(Debug, Subcommand)]
+#[command(
+    help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+)]
+pub enum QuotaCommand {
+    /// 오늘 장부와 남은 쓰기 수를 보여줍니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Show {
+        /// JSON으로 출력합니다.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Google 콘솔에서 확인한 사용량으로 장부를 맞춥니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Sync {
+        /// 콘솔에 표시된 오늘 사용량(units).
+        #[arg(long)]
+        used: u64,
+        /// 오늘 예산(units). 생략하면 장부 값 또는 9500.
+        #[arg(long)]
+        budget: Option<u64>,
+        /// 쓰기 단가(units). 콘솔 사용량과 계산이 어긋날 때 지정합니다.
+        #[arg(long)]
+        write_cost: Option<u64>,
+    },
+}
+
 /// 시청기록 하위 명령.
 #[derive(Debug, Subcommand)]
 #[command(
@@ -213,9 +280,9 @@ pub enum HistoryCommand {
         /// 최대 항목 수.
         #[arg(long)]
         limit: Option<usize>,
-        /// 오늘 사용할 쿼터 예산(units).
-        #[arg(long, default_value_t = DEFAULT_BUDGET)]
-        budget: u64,
+        /// 오늘 사용할 쿼터 예산(units). 기본: 장부 값 또는 9500.
+        #[arg(long)]
+        budget: Option<u64>,
         /// 실제 쓰기 없이 예상만 출력합니다.
         #[arg(long)]
         dry_run: bool,
@@ -250,21 +317,31 @@ pub async fn run(cli: Cli) -> i32 {
 
 async fn dispatch(cli: Cli) -> Result<i32, AppError> {
     let paths = Paths::discover()?;
+    let write_cost = cli.write_cost;
     match cli.command {
         Command::Auth { command } => auth_command(&paths, command).await,
         Command::Plan {
             types,
             refresh,
             json,
-        } => plan_command(&paths, &types, refresh, json).await,
+        } => plan_command(&paths, &types, refresh, json, write_cost).await,
         Command::Push {
             kind,
             limit,
             budget,
             delay_ms,
             yes,
-        } => push_command(&paths, kind, limit, budget, delay_ms, yes).await,
-        Command::History { command } => history_command(&paths, command).await,
+        } => push_command(&paths, kind, limit, budget, delay_ms, yes, write_cost).await,
+        Command::Migrate {
+            limit,
+            budget,
+            delay_ms,
+            refresh,
+            yes,
+        } => migrate_command(&paths, limit, budget, delay_ms, refresh, yes, write_cost).await,
+        Command::Status { json } => status_command(&paths, json, write_cost).await,
+        Command::Quota { command } => quota_command(&paths, command, write_cost).await,
+        Command::History { command } => history_command(&paths, command, write_cost).await,
         Command::Purge { tokens, yes } => purge_command(&paths, tokens, yes),
     }
 }
@@ -352,6 +429,7 @@ async fn plan_command(
     types: &[DataType],
     refresh: bool,
     json: bool,
+    write_cost: Option<u64>,
 ) -> Result<i32, AppError> {
     if types.is_empty() {
         return Err(AppError::Usage(
@@ -371,7 +449,8 @@ async fn plan_command(
     let plan = build_plan(&snapshot, &target, types, now)?;
     save_plan(paths, &plan)?;
 
-    let summary = summary_json(&plan, DEFAULT_BUDGET);
+    let (budget, write_cost) = quota_context(paths, None, write_cost, now);
+    let summary = summary_json(&plan, budget, write_cost);
     if json {
         let text = serde_json::to_string_pretty(&summary)
             .map_err(|err| AppError::json("계획 요약을 직렬화할 수 없습니다", err))?;
@@ -459,13 +538,15 @@ async fn push_command(
     paths: &Paths,
     kind: PushKind,
     limit: Option<usize>,
-    budget: u64,
+    budget: Option<u64>,
     delay_ms: u64,
     yes: bool,
+    write_cost: Option<u64>,
 ) -> Result<i32, AppError> {
     let _lock = DataLock::acquire(paths)?;
     let now = Utc::now();
     let types = kind.data_types();
+    let (budget, write_cost) = quota_context(paths, budget, write_cost, now);
 
     let source_api = build_api(paths, Account::Source)?;
     let snapshot = match load_plan(paths, now)? {
@@ -486,7 +567,7 @@ async fn push_command(
         return Ok(0);
     }
 
-    let quota = estimate_quota(&plan, budget);
+    let quota = estimate_quota(&plan, budget, write_cost);
     let prompt = format!(
         "쓰기 {}건, 예상 쿼터 {}/{} units입니다.",
         quota.write_actions, quota.estimated_units, budget
@@ -496,27 +577,72 @@ async fn push_command(
         return Ok(0);
     }
 
-    let mut journal = Journal::open(paths, now)?;
-    let mut quota_ledger = QuotaLedger::open(paths, budget, now)?;
-    let progress = ProgressReporter::new();
-    let expected_orders = expected_orders(&plan.source.playlists);
-    let mut executor = Executor::new(ExecutorDeps {
-        api: target_api.as_ref(),
-        journal: &mut journal,
-        quota: &mut quota_ledger,
-        progress: &progress,
-        opts: ExecOptions {
+    let orders = expected_orders(&plan.source.playlists);
+    run_plan(
+        paths,
+        target_api.as_ref(),
+        &plan.actions,
+        plan.playlist_targets.clone(),
+        orders,
+        ExecOptions {
             limit,
             delay: Duration::from_millis(delay_ms),
             verify_order: true,
+            write_cost,
         },
-        targets: plan.playlist_targets.clone(),
+        budget,
+        now,
+    )
+    .await
+}
+
+/// 쿼터 장부와 플래그에서 예산·단가를 결정한다.
+fn quota_context(
+    paths: &Paths,
+    budget: Option<u64>,
+    write_cost: Option<u64>,
+    now: chrono::DateTime<Utc>,
+) -> (u64, u64) {
+    let snapshot: Option<QuotaSnapshot> = QuotaLedger::peek(paths, now);
+    let budget = budget
+        .or_else(|| snapshot.map(|item| item.limit))
+        .unwrap_or(DEFAULT_BUDGET);
+    let write_cost = write_cost
+        .or_else(|| snapshot.map(|item| item.write_cost))
+        .unwrap_or(WRITE_QUOTA_UNIT);
+    (budget, write_cost.max(1))
+}
+
+/// 액션 목록을 실행기로 돌리고 결과를 출력한다.
+#[allow(clippy::too_many_arguments)]
+async fn run_plan(
+    paths: &Paths,
+    api: &dyn YouTubeApi,
+    actions: &[Action],
+    targets: HashMap<String, String>,
+    expected_orders: HashMap<String, Vec<String>>,
+    opts: ExecOptions,
+    budget: u64,
+    now: chrono::DateTime<Utc>,
+) -> Result<i32, AppError> {
+    let mut journal = Journal::open(paths, now)?;
+    let mut quota_ledger = QuotaLedger::open_with_cost(paths, budget, Some(opts.write_cost), now)?;
+    let progress = ProgressReporter::new();
+    let mut executor = Executor::new(ExecutorDeps {
+        api,
+        journal: &mut journal,
+        quota: &mut quota_ledger,
+        progress: &progress,
+        opts,
+        targets,
         expected_orders,
     });
-    let summary = executor.run(&plan.actions, now).await?;
+    let summary = executor.run(actions, now).await?;
     print!("{}", summary.render());
     if summary.limit_reached() {
-        eprintln!("--limit에 도달했습니다. 다시 실행하면 이어서 진행합니다.");
+        eprintln!("--limit에 도달했습니다. 같은 명령을 다시 실행하면 이어서 진행합니다.");
+    } else if summary.skipped_total() > 0 {
+        eprintln!("건너뛴 항목은 journal에 기록되어 다시 시도하지 않습니다.");
     }
     Ok(0)
 }
@@ -537,7 +663,11 @@ fn expected_orders(playlists: &[crate::youtube::Playlist]) -> HashMap<String, Ve
         .collect()
 }
 
-async fn history_command(paths: &Paths, command: HistoryCommand) -> Result<i32, AppError> {
+async fn history_command(
+    paths: &Paths,
+    command: HistoryCommand,
+    write_cost: Option<u64>,
+) -> Result<i32, AppError> {
     match command {
         HistoryCommand::Import { takeout } => {
             let file = history::import(paths, &takeout, Utc::now())?;
@@ -596,6 +726,7 @@ async fn history_command(paths: &Paths, command: HistoryCommand) -> Result<i32, 
         } => {
             let _lock = DataLock::acquire(paths)?;
             let now = Utc::now();
+            let (budget, write_cost) = quota_context(paths, budget, write_cost, now);
             let file = history::load(paths)?;
             let target_api = build_api(paths, Account::Target)?;
             let target = fetch_target_state(target_api.as_ref(), &[]).await?;
@@ -615,14 +746,15 @@ async fn history_command(paths: &Paths, command: HistoryCommand) -> Result<i32, 
                     plan.truncated
                 );
                 println!(
-                    "예상 쿼터: {} units (쓰기 {}건)",
-                    plan.actions.len() as u64 * crate::migrate::WRITE_QUOTA_UNIT,
-                    plan.actions.len()
+                    "예상 쿼터: {} units (쓰기 {}건, 단가 {})",
+                    plan.actions.len() as u64 * write_cost,
+                    plan.actions.len(),
+                    write_cost
                 );
                 return Ok(0);
             }
 
-            let estimate = plan.actions.len() as u64 * crate::migrate::WRITE_QUOTA_UNIT;
+            let estimate = plan.actions.len() as u64 * write_cost;
             let prompt = format!(
                 "플레이리스트 '{}'에 항목 {}건을 추가합니다. 예상 쿼터 {estimate}/{budget} units.",
                 plan.playlist_title,
@@ -633,9 +765,6 @@ async fn history_command(paths: &Paths, command: HistoryCommand) -> Result<i32, 
                 return Ok(0);
             }
 
-            let mut journal = Journal::open(paths, now)?;
-            let mut quota_ledger = QuotaLedger::open(paths, budget, now)?;
-            let progress = ProgressReporter::new();
             let mut targets = HashMap::new();
             if let Some(existing) = &plan.existing_playlist_id {
                 targets.insert(history::HISTORY_PLAYLIST_ID.to_string(), existing.clone());
@@ -646,29 +775,200 @@ async fn history_command(paths: &Paths, command: HistoryCommand) -> Result<i32, 
                 plan.video_ids.clone(),
             );
 
-            let mut executor = Executor::new(ExecutorDeps {
-                api: target_api.as_ref(),
-                journal: &mut journal,
-                quota: &mut quota_ledger,
-                progress: &progress,
-                opts: ExecOptions {
+            run_plan(
+                paths,
+                target_api.as_ref(),
+                &plan.actions,
+                targets,
+                orders,
+                ExecOptions {
                     limit: None,
                     delay: Duration::from_millis(delay_ms),
                     verify_order: true,
+                    write_cost,
                 },
-                targets,
-                expected_orders: orders,
-            });
-            let summary = executor.run(&plan.actions, now).await?;
-            print!("{}", summary.render());
+                budget,
+                now,
+            )
+            .await?;
             println!(
-                "플레이리스트 '{}' 처리 완료 (항목 {}건)",
+                "플레이리스트 '{}' 처리 완료 (계획 항목 {}건)",
                 plan.playlist_title,
                 plan.video_ids.len()
             );
             Ok(0)
         }
     }
+}
+
+async fn status_command(
+    paths: &Paths,
+    json: bool,
+    write_cost: Option<u64>,
+) -> Result<i32, AppError> {
+    let now = Utc::now();
+    let Some(plan) = load_plan(paths, now)? else {
+        return Err(AppError::Usage(
+            "저장된 계획이 없습니다. `stk plan` 또는 `stk migrate`를 먼저 실행하세요.".to_string(),
+        ));
+    };
+    let journal = Journal::open(paths, now)?;
+    let snapshot = QuotaLedger::peek(paths, now);
+    let (budget, write_cost) = quota_context(paths, None, write_cost, now);
+    let status = build_status(&plan, &journal, snapshot, write_cost, budget);
+    if json {
+        let text = serde_json::to_string_pretty(&status)
+            .map_err(|err| AppError::json("진행률을 직렬화할 수 없습니다", err))?;
+        println!("{text}");
+    } else {
+        print!("{}", status.render());
+        if status.pending_actions > 0 {
+            eprintln!(
+                "다음 실행: `stk migrate{}` 또는 `stk push <유형>`",
+                if status.pending_days > 1 {
+                    " (하루 예산 한도까지 자동 진행)"
+                } else {
+                    ""
+                }
+            );
+        } else {
+            eprintln!("이전이 끝났습니다. `stk purge`로 API 데이터를 정리할 수 있습니다.");
+        }
+    }
+    Ok(0)
+}
+
+async fn quota_command(
+    paths: &Paths,
+    command: QuotaCommand,
+    write_cost: Option<u64>,
+) -> Result<i32, AppError> {
+    let now = Utc::now();
+    match command {
+        QuotaCommand::Show { json } => {
+            let snapshot = QuotaLedger::peek(paths, now);
+            if json {
+                let payload = serde_json::json!({"today": snapshot});
+                let text = serde_json::to_string_pretty(&payload)
+                    .map_err(|err| AppError::json("쿼터 상태를 직렬화할 수 없습니다", err))?;
+                println!("{text}");
+            } else {
+                match snapshot {
+                    Some(snapshot) => {
+                        println!("태평양 날짜: {} (오늘)", snapshot.date_pt);
+                        println!(
+                            "사용/예산: {}/{} units (남은 {})",
+                            snapshot.used,
+                            snapshot.limit,
+                            snapshot.remaining()
+                        );
+                        println!(
+                            "쓰기 단가: {} units → 남은 쓰기 {}건",
+                            snapshot.write_cost,
+                            snapshot.writes_left()
+                        );
+                        println!("리셋: 태평양 시간 자정");
+                    }
+                    None => {
+                        let cost = write_cost.unwrap_or(WRITE_QUOTA_UNIT);
+                        println!(
+                            "오늘 쿼터 장부가 없습니다. 태평양 자정 이후 첫 쓰기에서 자동 초기화됩니다."
+                        );
+                        println!(
+                            "기본 단가 {} units · 기본 예산 {} units → 하루 {}건",
+                            cost,
+                            DEFAULT_BUDGET,
+                            DEFAULT_BUDGET / cost.max(1)
+                        );
+                    }
+                }
+            }
+            Ok(0)
+        }
+        QuotaCommand::Sync {
+            used,
+            budget,
+            write_cost: sync_cost,
+        } => {
+            let (budget, cost) = quota_context(paths, budget, sync_cost.or(write_cost), now);
+            let mut ledger = QuotaLedger::open_with_cost(paths, budget, Some(cost), now)?;
+            ledger.sync_used(used)?;
+            let snapshot = ledger.snapshot();
+            println!(
+                "쿼터 장부를 맞췄습니다: {}/{} units · 단가 {} units · 남은 쓰기 {}건",
+                snapshot.used,
+                snapshot.limit,
+                snapshot.write_cost,
+                snapshot.writes_left()
+            );
+            Ok(0)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn migrate_command(
+    paths: &Paths,
+    limit: Option<usize>,
+    budget: Option<u64>,
+    delay_ms: u64,
+    refresh: bool,
+    yes: bool,
+    write_cost: Option<u64>,
+) -> Result<i32, AppError> {
+    let _lock = DataLock::acquire(paths)?;
+    let now = Utc::now();
+    let (budget, write_cost) = quota_context(paths, budget, write_cost, now);
+    let types = [
+        DataType::Subscriptions,
+        DataType::Playlists,
+        DataType::Likes,
+    ];
+
+    let source_api = build_api(paths, Account::Source)?;
+    let snapshot =
+        load_or_collect_snapshot(paths, source_api.as_ref(), Account::Source, now, refresh).await?;
+    let target_api = build_api(paths, Account::Target)?;
+    let target = fetch_target_state(target_api.as_ref(), &snapshot.playlists).await?;
+    let plan = build_plan(&snapshot, &target, &types, now)?;
+    save_plan(paths, &plan)?;
+
+    if plan.actions.is_empty() {
+        println!("이미 완료되었습니다. 실행할 작업이 없습니다.");
+        return Ok(0);
+    }
+
+    let summary = summary_json(&plan, budget, write_cost);
+    print!("{}", render_plan_summary(&summary));
+    eprintln!("계획을 저장했습니다: {}", paths.plan().display());
+
+    let estimate = estimate_quota(&plan, budget, write_cost);
+    let prompt = format!(
+        "쓰기 {}건, 예상 쿼터 {}/{} units입니다.",
+        estimate.write_actions, estimate.estimated_units, budget
+    );
+    if !confirm(&prompt, yes)? {
+        eprintln!("취소했습니다.");
+        return Ok(0);
+    }
+
+    let orders = expected_orders(&plan.source.playlists);
+    run_plan(
+        paths,
+        target_api.as_ref(),
+        &plan.actions,
+        plan.playlist_targets.clone(),
+        orders,
+        ExecOptions {
+            limit,
+            delay: Duration::from_millis(delay_ms),
+            verify_order: true,
+            write_cost,
+        },
+        budget,
+        now,
+    )
+    .await
 }
 
 fn purge_command(paths: &Paths, tokens: bool, yes: bool) -> Result<i32, AppError> {

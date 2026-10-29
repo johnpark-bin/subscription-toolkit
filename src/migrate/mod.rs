@@ -7,6 +7,7 @@ pub mod order;
 pub mod plan;
 pub mod progress;
 pub mod quota;
+pub mod status;
 
 use std::path::Path;
 

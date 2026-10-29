@@ -487,6 +487,7 @@ pub fn fast_options() -> ExecOptions {
         limit: None,
         delay: std::time::Duration::ZERO,
         verify_order: false,
+        write_cost: subscription_toolkit::migrate::WRITE_QUOTA_UNIT,
     }
 }
 

@@ -3,7 +3,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::AppError;
-use crate::migrate::WRITE_QUOTA_UNIT;
 use crate::migrate::progress::ProgressReporter;
 use crate::migrate::quota::QuotaLedger;
 use crate::youtube::{ApiError, YouTubeApi};
@@ -22,13 +21,14 @@ pub struct OrderReport {
 /// 대상 플레이리스트의 항목 순서를 기대 순서와 비교하고, 다르면 위치를 고친다.
 ///
 /// 대상에 실제로 존재하는 기대 영상만 순서대로 비교한다(중간에 실패한 항목은 건너뛴다).
-/// 위치를 바꾸는 요청은 항목당 [`WRITE_QUOTA_UNIT`]만큼 예산을 쓴다.
+/// 위치를 바꾸는 요청은 항목당 `write_cost`만큼 예산을 쓴다.
 pub async fn verify_and_repair(
     api: &dyn YouTubeApi,
     playlist_id: &str,
     expected_video_ids: &[String],
     quota: &mut QuotaLedger,
     progress: &ProgressReporter,
+    write_cost: u64,
 ) -> Result<OrderReport, AppError> {
     let items = api.list_playlist_items(playlist_id).await?;
 
@@ -75,7 +75,7 @@ pub async fn verify_and_repair(
         if *position == index {
             continue;
         }
-        if let Err(error) = quota.reserve(WRITE_QUOTA_UNIT) {
+        if let Err(error) = quota.reserve(write_cost.max(1)) {
             return Ok(OrderReport {
                 playlist_id: playlist_id.to_string(),
                 repaired,
