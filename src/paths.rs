@@ -154,6 +154,11 @@ impl Paths {
     }
 }
 
+/// 파일/디렉터리 권한을 바꾼다. Windows에서는 아무 것도 하지 않는다.
+pub fn restrict_permissions(path: &Path, mode: u32) -> std::io::Result<()> {
+    restrict_mode(path, mode)
+}
+
 /// 파일을 원자적으로 쓴다. 상위 디렉터리가 이미 있어야 한다.
 pub fn write_file_atomic(path: &Path, contents: &[u8]) -> Result<(), AppError> {
     let tmp = path.with_extension("tmp");
