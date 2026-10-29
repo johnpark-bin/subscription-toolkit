@@ -368,6 +368,39 @@ async fn history_import_and_report_from_cli() {
 }
 
 #[tokio::test]
+async fn history_playlist_creates_private_playlist_from_cli() {
+    let harness = Harness::start().await;
+    write_nested_takeout(harness.home());
+    harness
+        .command()
+        .args(["history", "import", "--takeout"])
+        .arg(harness.home())
+        .assert()
+        .success();
+
+    harness
+        .command()
+        .args(["history", "playlist", "--yes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("플레이리스트 '시청기록 (이전)'"));
+
+    assert_eq!(harness.mock.created_playlists(Account::Target), 1);
+    let playlists = harness.mock.playlist_ids(Account::Target);
+    assert_eq!(playlists.len(), 1);
+    assert_eq!(
+        harness.mock.playlist_items(Account::Target, &playlists[0]),
+        vec![
+            "eeeeeeeeeee".to_string(),
+            "ccccccccccc".to_string(),
+            "bbbbbbbbbbb".to_string(),
+            "aaaaaaaaaaa".to_string()
+        ],
+        "광고 제외·최신순·중복 제거 순서로 들어가야 한다"
+    );
+}
+
+#[tokio::test]
 async fn history_playlist_dry_run_reports_plan() {
     let harness = Harness::start().await;
     write_nested_takeout(harness.home());

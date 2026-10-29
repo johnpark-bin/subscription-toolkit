@@ -718,6 +718,44 @@ mod tests {
     }
 
     #[test]
+    fn action_order_is_subscriptions_then_playlists_then_likes() {
+        let source = sample_snapshot(
+            Account::Source,
+            "UC_SRC",
+            now(),
+            vec![subscription("UC_A")],
+            vec![playlist("PL_A", "음악", &["VID_1"])],
+            vec![LikedVideo {
+                video_id: "VID_9".to_string(),
+                title: "영상 9".to_string(),
+            }],
+        );
+        let plan = build_plan(&source, &target("UC_DST"), &all_types(), now()).expect("계획 실패");
+        let order: Vec<DataType> = plan
+            .actions
+            .iter()
+            .map(|action| action.kind.data_type())
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                DataType::Subscriptions,
+                DataType::Playlists,
+                DataType::Playlists,
+                DataType::Likes,
+            ]
+        );
+        assert!(matches!(
+            plan.actions[1].kind,
+            ActionKind::CreatePlaylist { .. }
+        ));
+        assert!(matches!(
+            plan.actions[2].kind,
+            ActionKind::AddPlaylistItem { .. }
+        ));
+    }
+
+    #[test]
     fn plan_respects_selected_types() {
         let source = sample_snapshot(
             Account::Source,
