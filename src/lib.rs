@@ -2,6 +2,7 @@
 
 pub mod account;
 pub mod auth;
+pub mod browser;
 pub mod cli;
 pub mod config;
 pub mod error;
