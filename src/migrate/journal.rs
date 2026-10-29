@@ -11,6 +11,7 @@ use serde_json::Value;
 
 use crate::error::AppError;
 use crate::migrate::DATA_RETENTION_DAYS;
+use crate::migrate::model::DataType;
 use crate::paths::{Paths, write_file_atomic};
 
 /// journal 항목 상태.
@@ -162,6 +163,27 @@ impl Journal {
     /// journal에 기록된 완료 키 수.
     pub fn complete_count(&self) -> usize {
         self.complete.len()
+    }
+
+    /// 데이터 유형별 완료 키 수(성공/건너뜀).
+    ///
+    /// 계획이 새로 계산되어 이미 완료한 액션이 plan.json에서 빠져도 누적 진행률을 셀 수 있다.
+    pub fn complete_counts(&self) -> std::collections::BTreeMap<DataType, u64> {
+        let mut counts: std::collections::BTreeMap<DataType, u64> =
+            std::collections::BTreeMap::new();
+        for key in &self.complete {
+            let data_type = if key.starts_with("subscription:") {
+                DataType::Subscriptions
+            } else if key.starts_with("playlist:") || key.starts_with("playlist-item:") {
+                DataType::Playlists
+            } else if key.starts_with("like:") {
+                DataType::Likes
+            } else {
+                continue;
+            };
+            *counts.entry(data_type).or_insert(0) += 1;
+        }
+        counts
     }
 
     /// 이전 실행에서 만든 플레이리스트 매핑(소스 ID → 대상 ID).

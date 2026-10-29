@@ -435,6 +435,41 @@ async fn status_reports_progress_and_requires_plan() {
 }
 
 #[tokio::test]
+async fn status_keeps_completed_count_after_replan() {
+    let harness = Harness::start().await;
+    harness.mock.add_subscription(Account::Source, "UC_A");
+    harness.mock.add_subscription(Account::Source, "UC_B");
+
+    harness
+        .command()
+        .args(["plan", "--types", "subscriptions"])
+        .assert()
+        .success();
+    harness
+        .command()
+        .args(["push", "subscriptions", "--limit", "1", "--yes"])
+        .assert()
+        .success();
+
+    // 대상 상태가 바뀌었으므로 계획을 다시 계산하면 완료분이 plan에서 빠진다.
+    harness
+        .command()
+        .args(["plan", "--types", "subscriptions"])
+        .assert()
+        .success();
+
+    let output = harness
+        .command()
+        .args(["status", "--json"])
+        .output()
+        .expect("명령 실행 실패");
+    let status: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON 파싱");
+    assert_eq!(status["done_actions"], 1, "journal 누적 완료를 센다");
+    assert_eq!(status["pending_actions"], 1);
+    assert_eq!(status["total_actions"], 2);
+}
+
+#[tokio::test]
 async fn migrate_plans_and_runs_in_one_command() {
     let harness = Harness::start().await;
     harness.mock.add_subscription(Account::Source, "UC_A");

@@ -58,22 +58,36 @@ pub fn build_status(
     budget: u64,
 ) -> MigrationStatus {
     let write_cost = write_cost.max(1);
-    let mut per_type: BTreeMap<DataType, (u64, u64)> = BTreeMap::new();
+    // 완료 수는 journal 누적값을 쓴다. 계획을 다시 계산하면 완료분이 plan에서 빠지므로
+    // plan만으로 세면 진행률이 뒤로 갔다가 앞으로 튄다.
+    let done_by_type = journal.complete_counts();
+    let mut pending_by_type: BTreeMap<DataType, u64> = BTreeMap::new();
     for action in &plan.actions {
-        let entry = per_type.entry(action.kind.data_type()).or_default();
-        entry.0 += 1;
         if journal.is_complete(&action.key) {
-            entry.1 += 1;
+            continue;
         }
+        *pending_by_type.entry(action.kind.data_type()).or_insert(0) += 1;
     }
 
-    let types: Vec<TypeProgress> = per_type
+    let mut data_types: Vec<DataType> = done_by_type.keys().copied().collect();
+    for data_type in pending_by_type.keys() {
+        if !data_types.contains(data_type) {
+            data_types.push(*data_type);
+        }
+    }
+    data_types.sort();
+
+    let types: Vec<TypeProgress> = data_types
         .into_iter()
-        .map(|(data_type, (total, done))| TypeProgress {
-            data_type,
-            total,
-            done,
-            pending: total - done,
+        .map(|data_type| {
+            let done = done_by_type.get(&data_type).copied().unwrap_or(0);
+            let pending = pending_by_type.get(&data_type).copied().unwrap_or(0);
+            TypeProgress {
+                data_type,
+                total: done + pending,
+                done,
+                pending,
+            }
         })
         .collect();
 
