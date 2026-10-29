@@ -51,6 +51,9 @@ pub struct PlaylistSummary {
     pub id: String,
     /// 제목.
     pub title: String,
+    /// 설명.
+    #[serde(default)]
+    pub description: String,
     /// 공개 범위.
     pub privacy: Privacy,
     /// 항목 수.

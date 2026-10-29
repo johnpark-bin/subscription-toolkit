@@ -246,6 +246,7 @@ impl YouTubeApi for HttpYouTube {
             ],
             |item| {
                 let title = item.snippet.title.unwrap_or_default();
+                let description = item.snippet.description.unwrap_or_default();
                 let privacy = item
                     .status
                     .as_ref()
@@ -259,6 +260,7 @@ impl YouTubeApi for HttpYouTube {
                 Some(PlaylistSummary {
                     id: item.id,
                     title,
+                    description,
                     privacy,
                     item_count,
                 })
