@@ -21,7 +21,7 @@ pub use model::{Action, ActionKind, DataType, Plan, PushKind, Snapshot, TargetSt
 pub use plan::{
     DATA_RETENTION_DAYS, LIKE_LIMIT, PLAYLIST_ITEM_LIMIT, QuotaEstimate, SNAPSHOT_TTL_HOURS,
     WRITE_QUOTA_UNIT, build_plan, display_titles, estimate_quota, fetch_snapshot,
-    fetch_target_state, summary_json,
+    fetch_target_state, is_system_playlist, is_system_summary, summary_json,
 };
 
 /// 데이터 보관 기한을 넘겼는지 확인한다.

@@ -14,7 +14,7 @@ use subscription_toolkit::auth::{StaticTokenSource, TokenSource};
 use subscription_toolkit::error::AppError;
 use subscription_toolkit::migrate::executor::{ExecOptions, Executor, ExecutorDeps, RunSummary};
 use subscription_toolkit::migrate::journal::Journal;
-use subscription_toolkit::migrate::model::Action;
+use subscription_toolkit::migrate::model::{Action, TargetState};
 use subscription_toolkit::migrate::progress::ProgressReporter;
 use subscription_toolkit::migrate::quota::QuotaLedger;
 use subscription_toolkit::paths::Paths;
@@ -486,5 +486,61 @@ pub fn fast_options() -> ExecOptions {
         limit: None,
         delay: std::time::Duration::ZERO,
         verify_order: false,
+    }
+}
+
+/// 시청기록 픽스처 경로.
+pub const HISTORY_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/takeout/watch-history.json"
+);
+
+/// 픽스처 원문.
+pub fn history_fixture() -> String {
+    std::fs::read_to_string(HISTORY_FIXTURE).expect("픽스처 읽기 실패")
+}
+
+/// `Takeout/YouTube and YouTube Music/history/watch-history.json` 구조를 만든다.
+pub fn write_nested_takeout(root: &std::path::Path) -> std::path::PathBuf {
+    let dir = root
+        .join("Takeout")
+        .join("YouTube and YouTube Music")
+        .join("history");
+    std::fs::create_dir_all(&dir).expect("디렉터리 생성 실패");
+    let path = dir.join("watch-history.json");
+    std::fs::write(&path, history_fixture()).expect("픽스처 쓰기 실패");
+    path
+}
+
+/// 같은 구조의 Takeout zip을 만든다.
+pub fn write_takeout_zip(path: &std::path::Path) {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+
+    let file = std::fs::File::create(path).expect("zip 생성 실패");
+    let mut writer = zip::ZipWriter::new(file);
+    writer
+        .start_file(
+            "Takeout/YouTube and YouTube Music/history/watch-history.json",
+            SimpleFileOptions::default(),
+        )
+        .expect("zip 항목 생성 실패");
+    writer
+        .write_all(history_fixture().as_bytes())
+        .expect("zip 쓰기 실패");
+    writer.finish().expect("zip 마무리 실패");
+}
+
+/// 빈 대상 상태.
+pub fn empty_target(channel_id: &str) -> TargetState {
+    TargetState {
+        channel: ChannelInfo {
+            id: channel_id.to_string(),
+            title: "대상 채널".to_string(),
+        },
+        subscription_ids: std::collections::HashSet::new(),
+        playlist_summaries: Vec::new(),
+        playlist_items: std::collections::HashMap::new(),
+        liked_ids: std::collections::HashSet::new(),
     }
 }
