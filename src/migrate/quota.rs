@@ -190,6 +190,14 @@ impl QuotaLedger {
         self.save()
     }
 
+    /// API가 쿼터 초과를 돌려줬을 때 장부를 소진 상태로 표시한다.
+    ///
+    /// 콘솔 값과 장부가 어긋난 경우 다음 실행이 같은 오류를 반복하지 않게 한다.
+    pub fn mark_exhausted(&mut self) -> Result<(), AppError> {
+        self.used = self.limit;
+        self.save()
+    }
+
     /// 예산을 바꾼다.
     pub fn set_limit(&mut self, limit: u64) -> Result<(), AppError> {
         self.limit = limit.max(1);

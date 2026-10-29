@@ -189,6 +189,48 @@ async fn executor_restores_created_playlist_mapping() {
 }
 
 #[tokio::test]
+async fn api_quota_error_marks_ledger_exhausted() {
+    let (_dir, paths) = setup();
+    let api = FakeApi::new();
+    api.queue_error("subscribe:UC_B", ApiError::QuotaExceeded);
+    let actions = vec![subscribe("UC_A"), subscribe("UC_B")];
+
+    let error = run_actions(
+        &paths,
+        &api,
+        &actions,
+        fast_options(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .await
+    .expect_err("쿼터 초과는 중단해야 한다");
+    assert_eq!(error.exit_code(), 4);
+
+    // 장부는 예산을 모두 쓴 상태로 맞춰져 다음 실행이 곧바로 멈춘다.
+    let ledger = QuotaLedger::open(&paths, 9_500, now()).expect("장부 열기 실패");
+    assert_eq!(ledger.used(), 9_500);
+    assert_eq!(ledger.writes_left(), 0);
+
+    let error = run_actions(
+        &paths,
+        &api,
+        &actions,
+        fast_options(),
+        HashMap::new(),
+        HashMap::new(),
+    )
+    .await
+    .expect_err("예산 소진 상태에서는 즉시 중단해야 한다");
+    assert_eq!(error.exit_code(), 4);
+    assert_eq!(
+        api.count_calls("subscribe:UC_B"),
+        1,
+        "불필요한 API 호출을 하지 않는다"
+    );
+}
+
+#[tokio::test]
 async fn journal_skips_completed_actions() {
     let (_dir, paths) = setup();
     let api = FakeApi::new();

@@ -275,36 +275,42 @@ impl<'a> Executor<'a> {
                     entry.skipped += 1;
                     bar.advance(false);
                 }
-                Err(error) => match classify(error, &action.kind) {
-                    Failure::Skip(reason) => {
-                        self.record(
-                            &action.key,
-                            JournalStatus::Skipped,
-                            Some(Value::String(reason)),
-                            now,
-                        )?;
-                        entry.skipped += 1;
-                        bar.advance(false);
+                Err(error) => {
+                    if matches!(&error, StepError::Api(ApiError::QuotaExceeded)) {
+                        // 실제 쿼터가 장부보다 먼저 소진된 경우 장부를 맞춘다.
+                        let _ = self.deps.quota.mark_exhausted();
                     }
-                    Failure::Failed(message) => {
-                        self.record(
-                            &action.key,
-                            JournalStatus::Failed,
-                            Some(Value::String(message.clone())),
-                            now,
-                        )?;
-                        entry.failed += 1;
-                        finish_bars(&bars);
-                        return Err(AppError::Config(format!(
-                            "{} 처리에 실패했습니다: {message}",
-                            action.key
-                        )));
+                    match classify(error, &action.kind) {
+                        Failure::Skip(reason) => {
+                            self.record(
+                                &action.key,
+                                JournalStatus::Skipped,
+                                Some(Value::String(reason)),
+                                now,
+                            )?;
+                            entry.skipped += 1;
+                            bar.advance(false);
+                        }
+                        Failure::Failed(message) => {
+                            self.record(
+                                &action.key,
+                                JournalStatus::Failed,
+                                Some(Value::String(message.clone())),
+                                now,
+                            )?;
+                            entry.failed += 1;
+                            finish_bars(&bars);
+                            return Err(AppError::Config(format!(
+                                "{} 처리에 실패했습니다: {message}",
+                                action.key
+                            )));
+                        }
+                        Failure::Abort(app_error) => {
+                            finish_bars(&bars);
+                            return Err(app_error);
+                        }
                     }
-                    Failure::Abort(app_error) => {
-                        finish_bars(&bars);
-                        return Err(app_error);
-                    }
-                },
+                }
             }
         }
 
