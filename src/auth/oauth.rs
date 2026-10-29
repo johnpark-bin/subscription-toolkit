@@ -322,6 +322,7 @@ pub struct OAuthTokenSource {
     store: FileTokenStore,
     account: Account,
     http: reqwest::Client,
+    token_uri: String,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
 }
 
@@ -332,8 +333,17 @@ impl OAuthTokenSource {
             store,
             account,
             http: build_http()?,
+            token_uri: OAuthConfig::DEFAULT_TOKEN_URI.to_string(),
             clock: Arc::new(Utc::now),
         })
+    }
+
+    /// 갱신에 사용할 토큰 엔드포인트를 바꾼다.
+    ///
+    /// 기본값은 Google 토큰 엔드포인트다. 테스트에서 목 서버를 쓰기 위한 진입점이다.
+    pub fn with_token_uri(mut self, token_uri: impl Into<String>) -> Self {
+        self.token_uri = token_uri.into();
+        self
     }
 
     /// 테스트용 시계 주입.
@@ -346,7 +356,7 @@ impl OAuthTokenSource {
         let client = BasicClient::new(ClientId::new(stored.client_id.clone()))
             .set_client_secret(ClientSecret::new(stored.client_secret.clone()))
             .set_token_uri(
-                TokenUrl::new(OAuthConfig::DEFAULT_TOKEN_URI.to_string())
+                TokenUrl::new(self.token_uri.clone())
                     .map_err(|err| ApiError::Decode(err.to_string()))?,
             );
 
