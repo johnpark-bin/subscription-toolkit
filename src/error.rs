@@ -40,6 +40,9 @@ pub enum AppError {
         #[source]
         source: serde_json::Error,
     },
+    /// YouTube API 오류. 인증은 3, 쿼터 소진은 4, 나머지는 1.
+    #[error(transparent)]
+    Api(#[from] crate::youtube::ApiError),
 }
 
 impl AppError {
@@ -67,6 +70,15 @@ impl AppError {
             Self::Quota(_) => 4,
             Self::Partial(_) => 5,
             Self::Config(_) | Self::Io { .. } | Self::Json { .. } => 1,
+            Self::Api(error) => {
+                if error.is_auth() {
+                    3
+                } else if error.is_quota() {
+                    4
+                } else {
+                    1
+                }
+            }
         }
     }
 }
