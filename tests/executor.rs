@@ -3,14 +3,12 @@
 mod support;
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use support::FakeApi;
+use support::{FakeApi, fast_options, run_actions};
 use tempfile::TempDir;
 
-use subscription_toolkit::error::AppError;
-use subscription_toolkit::migrate::executor::{ExecOptions, Executor, ExecutorDeps, RunSummary};
+use subscription_toolkit::migrate::executor::{ExecOptions, Executor, ExecutorDeps};
 use subscription_toolkit::migrate::journal::{Journal, JournalStatus};
 use subscription_toolkit::migrate::model::{Action, ActionKind, DataType};
 use subscription_toolkit::migrate::progress::ProgressReporter;
@@ -29,14 +27,6 @@ fn setup() -> (TempDir, Paths) {
     let paths = Paths::with_root(dir.path());
     paths.ensure_layout().expect("디렉터리 생성");
     (dir, paths)
-}
-
-fn fast_options() -> ExecOptions {
-    ExecOptions {
-        limit: None,
-        delay: Duration::ZERO,
-        verify_order: false,
-    }
 }
 
 fn subscribe(channel_id: &str) -> Action {
@@ -80,29 +70,6 @@ fn add_item(source_playlist_id: &str, video_id: &str) -> Action {
             title: format!("영상 {video_id}"),
         },
     }
-}
-
-async fn run_actions(
-    paths: &Paths,
-    api: &FakeApi,
-    actions: &[Action],
-    opts: ExecOptions,
-    targets: HashMap<String, String>,
-    expected_orders: HashMap<String, Vec<String>>,
-) -> Result<RunSummary, AppError> {
-    let mut journal = Journal::open(paths, now()).expect("journal 열기 실패");
-    let mut quota = QuotaLedger::open(paths, 9_500, now()).expect("쿼터 장부 열기 실패");
-    let progress = ProgressReporter::with_tty(false);
-    let mut executor = Executor::new(ExecutorDeps {
-        api,
-        journal: &mut journal,
-        quota: &mut quota,
-        progress: &progress,
-        opts,
-        targets,
-        expected_orders,
-    });
-    executor.run(actions, now()).await
 }
 
 #[tokio::test]

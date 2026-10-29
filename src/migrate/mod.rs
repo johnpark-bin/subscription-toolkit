@@ -19,8 +19,9 @@ use crate::youtube::YouTubeApi;
 
 pub use model::{Action, ActionKind, DataType, Plan, PushKind, Snapshot, TargetState};
 pub use plan::{
-    DATA_RETENTION_DAYS, PLAYLIST_ITEM_LIMIT, QuotaEstimate, SNAPSHOT_TTL_HOURS, WRITE_QUOTA_UNIT,
-    build_plan, display_titles, estimate_quota, fetch_snapshot, fetch_target_state, summary_json,
+    DATA_RETENTION_DAYS, LIKE_LIMIT, PLAYLIST_ITEM_LIMIT, QuotaEstimate, SNAPSHOT_TTL_HOURS,
+    WRITE_QUOTA_UNIT, build_plan, display_titles, estimate_quota, fetch_snapshot,
+    fetch_target_state, summary_json,
 };
 
 /// 데이터 보관 기한을 넘겼는지 확인한다.

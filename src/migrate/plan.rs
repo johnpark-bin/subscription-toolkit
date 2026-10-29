@@ -25,6 +25,9 @@ pub const PLAYLIST_ITEM_LIMIT: usize = 5_000;
 /// 쓰기 요청 하나의 쿼터 비용.
 pub const WRITE_QUOTA_UNIT: u64 = 50;
 
+/// YouTube API가 돌려주는 좋아요 상한(최근 1,000개).
+pub const LIKE_LIMIT: usize = 1_000;
+
 /// 시스템 플레이리스트 ID 접두사.
 const SYSTEM_PLAYLIST_PREFIXES: [&str; 4] = ["LL", "WL", "HL", "UU"];
 
@@ -101,7 +104,9 @@ pub async fn fetch_snapshot(
             items,
         });
     }
-    let likes = api.list_liked_videos().await?;
+    let mut likes = api.list_liked_videos().await?;
+    // YouTube API는 최근 1,000개까지만 돌려준다. 방어적으로 여기서도 자른다.
+    likes.truncate(LIKE_LIMIT);
     Ok(Snapshot {
         account,
         channel,

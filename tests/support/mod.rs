@@ -11,6 +11,13 @@ use serde_json::Value;
 use wiremock::{MockServer, Request, Respond, ResponseTemplate};
 
 use subscription_toolkit::auth::{StaticTokenSource, TokenSource};
+use subscription_toolkit::error::AppError;
+use subscription_toolkit::migrate::executor::{ExecOptions, Executor, ExecutorDeps, RunSummary};
+use subscription_toolkit::migrate::journal::Journal;
+use subscription_toolkit::migrate::model::Action;
+use subscription_toolkit::migrate::progress::ProgressReporter;
+use subscription_toolkit::migrate::quota::QuotaLedger;
+use subscription_toolkit::paths::Paths;
 use subscription_toolkit::youtube::{
     ApiError, ChannelInfo, HttpYouTube, LikedVideo, PlaylistItemRef, PlaylistSummary, Privacy,
     Subscription, YouTubeApi,
@@ -128,6 +135,8 @@ struct FakeState {
     calls: Vec<String>,
     errors: Vec<(String, ApiError)>,
     created: u32,
+    next_item: u32,
+    reverse_append: bool,
 }
 
 impl FakeApi {
@@ -142,6 +151,15 @@ impl FakeApi {
             });
         }
         api
+    }
+
+    /// YouTube가 항목을 역순으로 덧붙이는 상황을 흉내 낸다(순서 보정 테스트용).
+    pub fn with_reverse_append(self, reverse: bool) -> Self {
+        {
+            let mut state = self.state.lock().expect("잠금");
+            state.reverse_append = reverse;
+        }
+        self
     }
 
     /// 채널을 바꾼다.
@@ -223,7 +241,12 @@ impl FakeApi {
         items
     }
 
-    /// 플레이리스트 요약.
+    /// 플레이리스트 요약 목록.
+    pub fn playlists(&self) -> Vec<PlaylistSummary> {
+        self.state.lock().expect("잠금").playlists.clone()
+    }
+
+    /// 플레이리스트 제목 목록.
     pub fn playlist_titles(&self) -> Vec<String> {
         let state = self.state.lock().expect("잠금");
         state
@@ -345,14 +368,45 @@ impl YouTubeApi for FakeApi {
         if let Some(error) = FakeApi::take_error(&mut state, &call) {
             return Err(error);
         }
+        state.next_item += 1;
+        let item_id = format!("PI_{}", state.next_item);
+        let reverse_append = state.reverse_append;
         let items = state.items.entry(playlist_id.to_string()).or_default();
-        let position = items.len() as u64;
-        items.push(PlaylistItemRef {
-            item_id: format!("PI_{playlist_id}_{position}"),
-            video_id: video_id.to_string(),
-            title: format!("영상 {video_id}"),
-            position,
-        });
+        if reverse_append {
+            let mut numbers: Vec<(String, String, String, u64)> = items
+                .iter()
+                .map(|item| {
+                    (
+                        item.item_id.clone(),
+                        item.video_id.clone(),
+                        item.title.clone(),
+                        item.position,
+                    )
+                })
+                .collect();
+            numbers.insert(
+                0,
+                (item_id, video_id.to_string(), format!("영상 {video_id}"), 0),
+            );
+            *items = numbers
+                .into_iter()
+                .enumerate()
+                .map(|(index, (item_id, video_id, title, _))| PlaylistItemRef {
+                    item_id,
+                    video_id,
+                    title,
+                    position: index as u64,
+                })
+                .collect();
+        } else {
+            let position = items.len() as u64;
+            items.push(PlaylistItemRef {
+                item_id,
+                video_id: video_id.to_string(),
+                title: format!("영상 {video_id}"),
+                position,
+            });
+        }
         Ok(())
     }
 
@@ -389,5 +443,48 @@ impl YouTubeApi for FakeApi {
             title: format!("영상 {video_id}"),
         });
         Ok(())
+    }
+}
+
+/// 테스트에서 쓰는 고정 시각(태평양 자정과 무관한 시점).
+pub fn test_now() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(2026, 10, 29, 12, 0, 0)
+        .single()
+        .expect("시각 생성")
+}
+
+/// 실행기를 준비해 액션을 실행한다.
+pub async fn run_actions(
+    paths: &Paths,
+    api: &FakeApi,
+    actions: &[Action],
+    opts: ExecOptions,
+    targets: std::collections::HashMap<String, String>,
+    expected_orders: std::collections::HashMap<String, Vec<String>>,
+) -> Result<RunSummary, AppError> {
+    let now = test_now();
+    let mut journal = Journal::open(paths, now).expect("journal 열기 실패");
+    let mut quota = QuotaLedger::open(paths, 9_500, now).expect("쿼터 장부 열기 실패");
+    let progress = ProgressReporter::with_tty(false);
+    let mut executor = Executor::new(ExecutorDeps {
+        api,
+        journal: &mut journal,
+        quota: &mut quota,
+        progress: &progress,
+        opts,
+        targets,
+        expected_orders,
+    });
+    executor.run(actions, now).await
+}
+
+/// 실행 옵션 기본값(지연 없음).
+pub fn fast_options() -> ExecOptions {
+    ExecOptions {
+        limit: None,
+        delay: std::time::Duration::ZERO,
+        verify_order: false,
     }
 }
