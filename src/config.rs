@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::error::AppError;
+use crate::paths::restrict_permissions;
 
 /// Google OAuth 데스크톱 클라이언트 설정.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +83,8 @@ impl OAuthConfig {
     }
 
     /// 파일에서 설정을 읽는다.
+    ///
+    /// 클라이언트 시크릿이 담긴 파일이므로 읽은 뒤 권한을 `0600`으로 맞춘다.
     pub fn load(path: &Path) -> Result<Self, AppError> {
         let raw = std::fs::read_to_string(path).map_err(|err| {
             if err.kind() == std::io::ErrorKind::NotFound {
@@ -96,7 +99,14 @@ impl OAuthConfig {
                 )
             }
         })?;
-        Self::from_json_str(&raw)
+        let config = Self::from_json_str(&raw)?;
+        restrict_permissions(path, 0o600).map_err(|err| {
+            AppError::io(
+                format!("설정 파일 권한을 설정할 수 없습니다: {}", path.display()),
+                err,
+            )
+        })?;
+        Ok(config)
     }
 }
 
@@ -123,6 +133,33 @@ mod tests {
         assert_eq!(cfg.client_secret, "secret-value");
         assert_eq!(cfg.auth_uri, "https://accounts.google.com/o/oauth2/auth");
         assert_eq!(cfg.token_uri, "https://oauth2.googleapis.com/token");
+    }
+
+    #[test]
+    fn config_restricts_permissions() {
+        let dir = tempfile::tempdir().expect("임시 디렉터리");
+        let path = dir.path().join("client_secret.json");
+        std::fs::write(&path, INSTALLED).expect("설정 파일 쓰기");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+                .expect("권한 변경");
+        }
+
+        OAuthConfig::load(&path).expect("설정 로드 실패");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path)
+                .expect("메타데이터")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "클라이언트 시크릿은 0600으로 맞춘다");
+        }
     }
 
     #[test]
