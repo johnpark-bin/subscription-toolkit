@@ -20,6 +20,7 @@ stk push likes --yes --budget 9500
 ```
 
 - 비TTY에서 실행되므로 `--yes`는 필수다. 없으면 종료 코드 2로 멈춘다.
+- 스케줄러는 절대 경로를 요구한다. `scripts/build.sh --check --install ~/.local/bin`로 설치하면 사용할 경로가 출력된다.
 - 스케줄러 시각은 태평양 자정(쿼터 리셋) 직후로 잡는다. 아래 예시는 매일 07:10 UTC를 쓴다.
 - 토큰이 Testing 상태 OAuth 클라이언트에서 발급되었다면 refresh token이 7일 후 만료된다. 그때는 스케줄러가 실패하므로 직접 `stk auth login --account <source|target>`으로 재로그인해야 한다. 가능하면 동의 화면을 In production으로 전환한다. 자세한 절차는 [준비 절차](setup.md#3-oauth-동의-화면-구성)를 따른다.
 

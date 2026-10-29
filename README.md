@@ -124,6 +124,19 @@ data/.lock                 동시 실행 방지 잠금
 | [docs/automation.md](docs/automation.md) | cron/launchd로 매일 무인 실행하는 방법과 안전장치 |
 | [AGENTS.md](AGENTS.md) | 저장소 운영 규칙(브랜치, 커밋, 테스트, 보안) |
 
+## 빌드와 설치
+
+```bash
+scripts/build.sh                        # release 빌드
+scripts/build.sh --check                # fmt/clippy/test 검증 후 빌드
+scripts/build.sh --check --install      # 검증 후 ~/.local/bin/stk 설치
+scripts/build.sh --install /usr/local/bin
+scripts/build.sh --debug                # debug 프로필 빌드
+scripts/build.sh --clean                # target 정리 후 빌드
+```
+
+`--install`은 바이너리를 `0755`로 복사하고 PATH 안내와 스케줄러(launchd/cron)에 넣을 절대 경로를 출력한다.
+
 ## 개발
 
 ```bash
