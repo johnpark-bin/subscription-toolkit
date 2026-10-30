@@ -62,6 +62,21 @@ stk browser sync likes         --port 9222 --limit 50 --yes
 - 쿼터 장부(`data/quota.json`)는 쓰지 않는다. 브라우저 모드는 Google Cloud 쿼터를 소비하지 않는다.
 - 진행률은 TTY에서 요약만 출력하고, 완료 후 `stk status`로 확인한다.
 
+## 브라우저 기준 조정(reconcile)
+
+API의 대상 상태는 브라우저로 만든 좋아요·구독을 늦게 반영하거나 일부만 반영한다. 이때 계획(`stk plan`) 기반 sync는 실제로는 이미 있는 항목을 다시 쓰려 하고, 빠진 항목은 놓친다. `browser reconcile`은 두 세션에서 직접 읽어 집합을 비교한다.
+
+```bash
+stk browser reconcile --source-port 9223 --target-port 9222 --dry-run
+stk browser reconcile --types likes --yes
+stk browser reconcile --types subscriptions --yes
+```
+
+- 좋아요는 `browse(VLLL)`, 구독은 `browse(FEchannels)`로 읽고, 빠진 항목만 `/like/like`·`/subscription/subscribe`로 추가한다.
+- journal 키는 `like:{video_id}`, `subscription:{channel_id}`로 계획 기반 실행과 공유하되, **대상 실측을 우선**한다(이전 성공 기록이 있어도 대상에 없으면 다시 시도).
+- 대상에만 있는 항목은 건드리지 않는다. 즉 결과는 "대상 ⊇ 원본"이다. 완전 동일로 만들려면 별도의 취소·해지 기능이 필요하다(현재 미지원).
+- 읽기 한계: 좋아요 목록 헤더의 개수는 비공개·삭제 영상까지 포함하므로 실제 조회 가능한 수와 다르다(예: 832 표시 vs 721 조회).
+
 ## Watch Later(나중에 볼 동영상)
 
 API와 Takeout에서 빠지는 항목이라 브라우저 세션으로만 동기화한다. 검증된 동작:
