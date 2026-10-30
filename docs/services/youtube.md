@@ -157,7 +157,18 @@ stk browser sync subscriptions --port 9222 --dry-run
 stk browser sync subscriptions --port 9222 --limit 20 --yes
 ```
 
-## 7. Watch Later 동기화
+## 7. 브라우저 기준 조정
+
+API의 대상 상태가 실제와 어긋날 때(브라우저 실행분이 API 목록에 늦게 반영) 두 브라우저 세션을 직접 비교해 빠진 좋아요·구독만 채운다.
+
+```bash
+stk browser reconcile --source-port 9223 --target-port 9222 --dry-run
+stk browser reconcile --yes
+```
+
+대상에만 있는 항목은 유지하므로 결과는 "대상이 원본을 포함"하는 상태다. 자세한 동작과 한계는 [브라우저 세션 실행](../browser-mode.md#브라우저-기준-조정reconcile)을 따른다.
+
+## 8. Watch Later 동기화
 
 API와 Takeout으로는 옮길 수 없고, 브라우저 세션에서만 가능하다.
 
@@ -176,7 +187,7 @@ stk browser watch-later sync --port 9222 --prune --yes
 - `--prune`은 대상에만 있는 항목을 삭제한다. 원본 내보내기 파일이 비어 있으면 안전을 위해 중단한다.
 - 자세한 준비·문제 해결은 [브라우저 세션 실행](../browser-mode.md)을 따른다.
 
-## 8. 자동화
+## 9. 자동화
 
 여러 날 반복 실행을 스케줄러에 맡기는 방법은 [무인 반복 실행](../automation.md)을 따른다.
 
