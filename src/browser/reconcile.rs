@@ -161,10 +161,11 @@ async fn apply_missing(
     let mut pacing = Jitter::from_clock();
     let mut first = true;
     for id in ids {
+        // 대상에서 실제로 빠져 있으므로 journal 기록과 무관하게 다시 시도한다.
+        // (이전 실행이 성공으로 남았어도 플랫폼이 반영하지 않았을 수 있다.)
         let key = format!("{}{id}", apply.prefix);
         if journal.is_complete(&key) {
             *already_done += 1;
-            continue;
         }
         if !first {
             let delay = opts.delay + pacing.duration(opts.jitter);
