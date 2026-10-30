@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
 use crate::browser::cdp::CdpClient;
+use crate::browser::reconcile::{diff_missing, read_liked_videos, read_subscriptions, reconcile};
 use crate::browser::sync::{BrowserSyncOptions, sync_actions, verify_account};
 use crate::browser::watch_later::{
     WatchLaterFile, plan_watch_later, read_watch_later, sync_watch_later,
@@ -242,6 +243,43 @@ pub enum BrowserCommand {
         #[arg(long)]
         expect_channel: Option<String>,
     },
+    /// 두 브라우저 세션을 비교해 빠진 좋아요·구독만 반영합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Reconcile {
+        /// 원본 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9223)]
+        source_port: u16,
+        /// 대상 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        target_port: u16,
+        /// 비교할 유형(쉼표 구분): likes, subscriptions.
+        #[arg(
+            long,
+            value_enum,
+            value_delimiter = ',',
+            default_value = "likes,subscriptions",
+            hide_possible_values = true
+        )]
+        types: Vec<ReconcileType>,
+        /// 유형별 최대 추가 개수.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 액션 사이 최소 대기(ms).
+        #[arg(long, default_value_t = 3_000)]
+        delay_ms: u64,
+        /// 최소 대기에 더할 무작위 폭(ms).
+        #[arg(long, default_value_t = 1_500)]
+        jitter_ms: u64,
+        /// 실제 쓰기 없이 차이만 확인합니다.
+        #[arg(long)]
+        dry_run: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
+        /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
+        #[arg(long)]
+        skip_account_check: bool,
+    },
     /// Watch Later(나중에 볼 동영상)를 브라우저 세션으로 내보내고 동기화합니다.
     #[command(
         help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
@@ -279,6 +317,15 @@ pub enum BrowserCommand {
         #[arg(long)]
         skip_account_check: bool,
     },
+}
+
+/// 브라우저 비교 대상 유형.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReconcileType {
+    /// 좋아요.
+    Likes,
+    /// 구독.
+    Subscriptions,
 }
 
 /// Watch Later 하위 명령.
@@ -1100,6 +1147,134 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
                         .map(|value| value.to_string()))
                     .unwrap_or_else(|| "-".to_string())
             );
+            Ok(0)
+        }
+        BrowserCommand::Reconcile {
+            source_port,
+            target_port,
+            types,
+            limit,
+            delay_ms,
+            jitter_ms,
+            dry_run,
+            yes,
+            skip_account_check,
+        } => {
+            let now = Utc::now();
+            let plan = load_plan(paths, now)?;
+            let opts = BrowserSyncOptions {
+                delay: Duration::from_millis(delay_ms),
+                jitter: Duration::from_millis(jitter_ms),
+                retry_base: Duration::from_secs(5),
+                limit,
+            };
+
+            let mut source_cdp = CdpClient::attach(source_port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                let expected = plan
+                    .as_ref()
+                    .map(|plan| plan.source.channel.id.clone())
+                    .unwrap_or_default();
+                verify_account(&mut source_cdp, &expected).await?;
+            }
+            let want_likes = types.contains(&ReconcileType::Likes);
+            let want_subs = types.contains(&ReconcileType::Subscriptions);
+            let source_likes = if want_likes {
+                Some(
+                    read_liked_videos(&mut source_cdp, 50)
+                        .await?
+                        .into_iter()
+                        .map(|item| item.video_id)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            };
+            let source_subs = if want_subs {
+                Some(
+                    read_subscriptions(&mut source_cdp, 50)
+                        .await?
+                        .into_iter()
+                        .map(|item| item.video_id)
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                None
+            };
+            source_cdp.close().await;
+
+            let mut target_cdp = CdpClient::attach(target_port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                let expected = plan
+                    .as_ref()
+                    .map(|plan| plan.target.channel.id.clone())
+                    .unwrap_or_default();
+                verify_account(&mut target_cdp, &expected).await?;
+            }
+
+            if dry_run {
+                let mut lines = Vec::new();
+                if let Some(likes) = &source_likes {
+                    let target = read_liked_videos(&mut target_cdp, 50).await?;
+                    let target_ids: std::collections::HashSet<String> =
+                        target.iter().map(|item| item.video_id.clone()).collect();
+                    let missing = diff_missing(likes, &target_ids, limit);
+                    lines.push(format!(
+                        "좋아요: 원본 {} · 대상 {} · 추가 {}",
+                        likes.len(),
+                        target.len(),
+                        missing.len()
+                    ));
+                }
+                if let Some(subs) = &source_subs {
+                    let target = read_subscriptions(&mut target_cdp, 50).await?;
+                    let target_ids: std::collections::HashSet<String> =
+                        target.iter().map(|item| item.video_id.clone()).collect();
+                    let missing = diff_missing(subs, &target_ids, limit);
+                    lines.push(format!(
+                        "구독: 원본 {} · 대상 {} · 추가 {}",
+                        subs.len(),
+                        target.len(),
+                        missing.len()
+                    ));
+                }
+                target_cdp.close().await;
+                for line in lines {
+                    println!("{line}");
+                }
+                return Ok(0);
+            }
+
+            let total_add = source_likes.as_ref().map(|v| v.len()).unwrap_or(0)
+                + source_subs.as_ref().map(|v| v.len()).unwrap_or(0);
+            let prompt = format!(
+                "브라우저 기준으로 빠진 항목만 반영합니다(원본 좋아요 {}건 · 구독 {}건 기준). 대상 계정 상태가 바뀝니다.",
+                source_likes.as_ref().map(|v| v.len()).unwrap_or(0),
+                source_subs.as_ref().map(|v| v.len()).unwrap_or(0)
+            );
+            let _ = total_add;
+            if !confirm(&prompt, yes)? {
+                target_cdp.close().await;
+                eprintln!("취소했습니다.");
+                return Ok(0);
+            }
+
+            let mut journal = Journal::open(paths, now)?;
+            let report = reconcile(
+                &mut target_cdp,
+                source_likes.as_deref(),
+                source_subs.as_deref(),
+                &mut journal,
+                &opts,
+                now,
+            )
+            .await?;
+            target_cdp.close().await;
+            print!("{}", report.render());
             Ok(0)
         }
         BrowserCommand::WatchLater { command } => watch_later_command(paths, command).await,

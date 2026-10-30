@@ -232,6 +232,100 @@ pub fn response_from(value: Value) -> Result<PageResponse, CdpError> {
         .map_err(|error| CdpError::Protocol(format!("페이지 응답을 해석할 수 없습니다: {error}")))
 }
 
+/// browse 기반 목록 읽기 스크립트를 만든다. `extract`는 `items`/`next`를 채우는 JS 조각이다.
+fn browse_reader_js(browse_id: &str, continuation: Option<&str>, extract: &str) -> String {
+    let mut js = String::new();
+    js.push_str(
+        r#"(async () => {
+  const cfg = window.ytcfg;
+  if (!cfg || typeof cfg.get !== 'function') {
+    return { ok: false, status: 0, items: [], error: 'youtube 페이지가 아닙니다' };
+  }
+  const key = cfg.get('INNERTUBE_API_KEY');
+  const context = cfg.get('INNERTUBE_CONTEXT');
+  if (!key || !context) {
+    return { ok: false, status: 0, items: [], error: 'INNERTUBE 설정을 읽을 수 없습니다' };
+  }
+  const origin = 'https://www.youtube.com';
+  const sapisid = (document.cookie.match(/(?:^|; )SAPISID=([^;]+)/) || [])[1] || '';
+  const sha1 = async (text) => Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text)))
+  ).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const ts = Math.floor(Date.now() / 1000);
+  const headers = {
+    'content-type': 'application/json',
+    'x-origin': origin,
+    'x-youtube-client-name': String((context.client || {}).clientName || 1),
+    'x-youtube-client-version': String((context.client || {}).clientVersion || ''),
+  };
+  if (sapisid) headers.authorization = 'SAPISIDHASH ' + ts + '_' + await sha1(ts + ' ' + sapisid + ' ' + origin);
+  const body = { context: context, browseId: "#,
+    );
+    js.push_str(&js_literal(browse_id));
+    js.push_str(
+        r#" };
+  const continuation = "#,
+    );
+    js.push_str(&js_literal(continuation.unwrap_or_default()));
+    js.push_str(
+        r#";
+  if (continuation) body.continuation = continuation;
+  try {
+    const response = await fetch(origin + '/youtubei/v1/browse?key=' + encodeURIComponent(key) + '&prettyPrint=false', {
+      method: 'POST', credentials: 'include', headers: headers, body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (error) {
+      return { ok: false, status: response.status, items: [], error: 'JSON 해석 실패' };
+    }
+    const items = [];
+    let next = null;
+"#,
+    );
+    js.push_str(extract);
+    js.push_str(
+        r#"
+    return { ok: response.ok, status: response.status, items: items, continuation: next };
+  } catch (error) {
+    return { ok: false, status: 0, items: [], error: String(error) };
+  }
+})()"#,
+    );
+    js
+}
+
+const COLLECT_IDS_JS: &str = r#"
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.lockupViewModel && node.lockupViewModel.contentId) {
+        const vm = node.lockupViewModel;
+        const meta = vm.metadata && vm.metadata.lockupMetadataViewModel;
+        let title = '';
+        if (meta && meta.title && meta.title.content) title = meta.title.content;
+        items.push({ video_id: vm.contentId, title: title });
+      }
+      if (node.channelRenderer && node.channelRenderer.channelId) {
+        items.push({ video_id: node.channelRenderer.channelId, title: '' });
+      }
+      const token = node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token;
+      if (token) next = token;
+      Object.values(node).forEach(walk);
+    };
+    walk(parsed);
+"#;
+
+/// 좋아요(LL) 목록을 읽는 스크립트.
+pub fn liked_videos_read_js(continuation: Option<&str>) -> String {
+    browse_reader_js("VLLL", continuation, COLLECT_IDS_JS)
+}
+
+/// 구독 목록(FEchannels)을 읽는 스크립트.
+pub fn subscriptions_read_js(continuation: Option<&str>) -> String {
+    browse_reader_js("FEchannels", continuation, COLLECT_IDS_JS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
