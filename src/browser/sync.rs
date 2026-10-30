@@ -78,9 +78,9 @@ pub async fn verify_account(
     cdp: &mut CdpClient,
     expected_channel_id: &str,
 ) -> Result<Value, AppError> {
-    cdp.navigate("https://www.youtube.com/")
-        .await
-        .map_err(cdp_error)?;
+    // 일반 YouTube 페이지의 ytcfg에는 CHANNEL_ID가 없을 수 있다. Studio는 채널 단위로
+    // 동작하므로 현재 세션의 채널 ID를 확실히 알려준다.
+    cdp.navigate(page::STUDIO_URL).await.map_err(cdp_error)?;
     let account = cdp.evaluate(&page::account_js()).await.map_err(cdp_error)?;
 
     let logged_in = account["logged_in"].as_bool().unwrap_or(false);
@@ -88,9 +88,15 @@ pub async fn verify_account(
         .as_str()
         .unwrap_or_default()
         .to_string();
-    if !logged_in || channel.is_empty() {
+    if !logged_in {
         return Err(AppError::Auth(
             "브라우저에 YouTube 로그인이 필요합니다. Chrome에서 로그인한 뒤 다시 실행하세요."
+                .to_string(),
+        ));
+    }
+    if channel.is_empty() {
+        return Err(AppError::Auth(
+            "브라우저 세션의 채널을 확인할 수 없습니다. YouTube Studio에서 채널을 선택한 뒤 다시 실행하세요."
                 .to_string(),
         ));
     }

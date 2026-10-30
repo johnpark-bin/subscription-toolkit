@@ -31,6 +31,7 @@ fn now() -> chrono::DateTime<Utc> {
 struct FakeCdp {
     url: String,
     expressions: Arc<Mutex<Vec<String>>>,
+    navigations: Arc<Mutex<Vec<String>>>,
 }
 
 async fn start_fake(script: Vec<Value>) -> FakeCdp {
@@ -41,6 +42,8 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
     let mut queue: VecDeque<Value> = script.into();
     let navigated: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let navigated_writer = Arc::clone(&navigated);
+    let navigations: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let navigations_writer = Arc::clone(&navigations);
 
     tokio::spawn(async move {
         let Ok((stream, _)) = listener.accept().await else {
@@ -65,6 +68,10 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
             if request["method"] == "Page.navigate" {
                 if let Some(url) = request["params"]["url"].as_str() {
                     *navigated_writer.lock().expect("잠금") = Some(url.to_string());
+                    navigations_writer
+                        .lock()
+                        .expect("잠금")
+                        .push(url.to_string());
                 }
                 let reply = json!({"id": id, "result": {"frameId": "F1"}});
                 let _ = ws.send(Message::Text(reply.to_string())).await;
@@ -107,6 +114,7 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
     FakeCdp {
         url: format!("ws://{address}"),
         expressions,
+        navigations,
     }
 }
 
@@ -207,6 +215,16 @@ async fn verify_account_accepts_matching_channel() {
         .await
         .expect("채널이 같으면 통과해야 한다");
     assert_eq!(account["channel_id"], "UC_DST");
+
+    let navigations = fake.navigations.lock().expect("잠금").clone();
+    assert_eq!(
+        navigations,
+        vec![
+            "https://studio.youtube.com/".to_string(),
+            "https://www.youtube.com/".to_string()
+        ],
+        "Studio에서 확인한 뒤 요청 오리진(www.youtube.com)으로 돌아온다"
+    );
     assert!(
         fake.expressions
             .lock()
