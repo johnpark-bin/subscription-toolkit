@@ -18,7 +18,7 @@
 
 | 항목 | 이유 |
 | --- | --- |
-| Watch Later(나중에 볼 동영상) | API 접근이 막혀 있고(`playlistOperationUnsupported`), Takeout 재생목록 내보내기에서도 제외된다 |
+| Watch Later(나중에 볼 동영상) | API 접근이 막혀 있고(`playlistOperationUnsupported`), Takeout 재생목록 내보내기에서도 제외된다. 브라우저 세션(CDP)에서는 `browse(VLWL)` 조회와 `browse/edit_playlist`(playlistId `WL`) 추가·삭제가 가능해 `stk browser watch-later`로만 이전한다 |
 | 업로드 영상 | 채널 소유 자산이며 계정 이전 API가 없다 |
 | 댓글 | 작성자 계정 귀속이며 대량 쓰기 API가 없다 |
 | 멤버십, 구매/대여, 결제 | 계정 종속 상품 |
