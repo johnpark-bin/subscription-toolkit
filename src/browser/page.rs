@@ -74,7 +74,9 @@ pub fn watch_later_read_js(continuation: Option<&str>) -> String {
         if (renderer.title) title = renderer.title.simpleText || (renderer.title.runs || []).map((run) => run.text).join('');
         items.push({ video_id: renderer.videoId, title: title });
       }
-      const token = node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token;
+      const token = (node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token)
+        || (node.continuationCommand && node.continuationCommand.token)
+        || (node.nextContinuationData && node.nextContinuationData.continuation);
       if (token) next = token;
       Object.values(node).forEach(walk);
     };
@@ -309,7 +311,9 @@ const COLLECT_IDS_JS: &str = r#"
       if (node.channelRenderer && node.channelRenderer.channelId) {
         items.push({ video_id: node.channelRenderer.channelId, title: '' });
       }
-      const token = node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token;
+      const token = (node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token)
+        || (node.continuationCommand && node.continuationCommand.token)
+        || (node.nextContinuationData && node.nextContinuationData.continuation);
       if (token) next = token;
       Object.values(node).forEach(walk);
     };
