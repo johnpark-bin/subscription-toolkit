@@ -7,10 +7,14 @@
 pub mod cdp;
 pub mod jitter;
 pub mod page;
+pub mod reconcile;
 pub mod sync;
 pub mod watch_later;
 
 pub use cdp::{CdpClient, CdpError, PageResponse};
+pub use reconcile::{
+    ReconcileReport, diff_missing, read_liked_videos, read_subscriptions, reconcile,
+};
 pub use sync::{BrowserSyncOptions, BrowserSyncReport, sync_actions, verify_account};
 pub use watch_later::{
     WatchLaterFile, WatchLaterItem, WatchLaterReport, plan_watch_later, read_watch_later,

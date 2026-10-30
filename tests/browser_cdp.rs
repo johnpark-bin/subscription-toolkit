@@ -703,3 +703,44 @@ async fn watch_later_refuses_prune_with_empty_source() {
         "읽기도 하지 않는다"
     );
 }
+
+#[tokio::test]
+async fn reconcile_adds_only_missing_likes_and_subscriptions() {
+    let harness = harness();
+    let fake = start_fake(vec![
+        json!({"ok": true, "status": 200, "items": [{"video_id": "B", "title": "b"}], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{}"}),
+        json!({"ok": true, "status": 200, "items": [{"video_id": "UC_HAVE", "title": ""}], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+
+    let report = subscription_toolkit::browser::reconcile(
+        &mut cdp,
+        Some(&["A".to_string(), "B".to_string()]),
+        Some(&["UC_HAVE".to_string(), "UC_NEW".to_string()]),
+        &mut journal,
+        &fast_options(),
+        now(),
+    )
+    .await
+    .expect("조정 실패");
+
+    assert_eq!(report.likes_added, 1);
+    assert_eq!(report.subscriptions_added, 1);
+    assert_eq!(report.skipped, 2, "이미 있는 항목은 건너뛴다");
+
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert!(expressions[1].contains(r#""videoId":"A""#));
+    assert!(expressions[1].contains("/youtubei/v1/like/like"));
+    assert!(expressions[3].contains(r#""channelIds":["UC_NEW"]"#));
+    assert!(expressions[3].contains("/youtubei/v1/subscription/subscribe"));
+
+    let journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+    assert!(journal.is_complete("like:A"));
+    assert!(journal.is_complete("subscription:UC_NEW"));
+}
