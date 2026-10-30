@@ -8,6 +8,11 @@ pub mod cdp;
 pub mod jitter;
 pub mod page;
 pub mod sync;
+pub mod watch_later;
 
 pub use cdp::{CdpClient, CdpError, PageResponse};
 pub use sync::{BrowserSyncOptions, BrowserSyncReport, sync_actions, verify_account};
+pub use watch_later::{
+    WatchLaterFile, WatchLaterItem, WatchLaterReport, plan_watch_later, read_watch_later,
+    sync_watch_later,
+};

@@ -13,6 +13,96 @@ pub const YOUTUBE_URL: &str = "https://www.youtube.com/";
 /// 채널 ID를 노출하는 Studio 페이지(계정 확인용).
 pub const STUDIO_URL: &str = "https://studio.youtube.com/";
 
+/// Watch Later 재생목록 ID.
+pub const WATCH_LATER_PLAYLIST_ID: &str = "WL";
+/// Watch Later 조회용 browse ID.
+pub const WATCH_LATER_BROWSE_ID: &str = "VLWL";
+
+/// Watch Later 목록을 읽는 스크립트(선택적 continuation).
+pub fn watch_later_read_js(continuation: Option<&str>) -> String {
+    let mut js = String::new();
+    js.push_str(
+        r#"(async () => {
+  const cfg = window.ytcfg;
+  if (!cfg || typeof cfg.get !== 'function') {
+    return { ok: false, status: 0, items: [], error: 'youtube 페이지가 아닙니다' };
+  }
+  const key = cfg.get('INNERTUBE_API_KEY');
+  const context = cfg.get('INNERTUBE_CONTEXT');
+  if (!key || !context) {
+    return { ok: false, status: 0, items: [], error: 'INNERTUBE 설정을 읽을 수 없습니다' };
+  }
+  const origin = 'https://www.youtube.com';
+  const sapisid = (document.cookie.match(/(?:^|; )SAPISID=([^;]+)/) || [])[1] || '';
+  const sha1 = async (text) => Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-1', new TextEncoder().encode(text)))
+  ).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  const ts = Math.floor(Date.now() / 1000);
+  const headers = {
+    'content-type': 'application/json',
+    'x-origin': origin,
+    'x-youtube-client-name': String((context.client || {}).clientName || 1),
+    'x-youtube-client-version': String((context.client || {}).clientVersion || ''),
+  };
+  if (sapisid) headers.authorization = 'SAPISIDHASH ' + ts + '_' + await sha1(ts + ' ' + sapisid + ' ' + origin);
+  const body = { context: context, browseId: "#,
+    );
+    js.push_str(&js_literal(WATCH_LATER_BROWSE_ID));
+    js.push_str(
+        r#" };
+  const continuation = "#,
+    );
+    js.push_str(&js_literal(continuation.unwrap_or_default()));
+    js.push_str(
+        r#";
+  if (continuation) { body.continuation = continuation; }
+  try {
+    const response = await fetch(origin + '/youtubei/v1/browse?key=' + encodeURIComponent(key) + '&prettyPrint=false', {
+      method: 'POST', credentials: 'include', headers: headers, body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (error) { return { ok: false, status: response.status, items: [], error: 'JSON 해석 실패' }; }
+    const items = [];
+    let next = null;
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.playlistVideoRenderer && node.playlistVideoRenderer.videoId) {
+        const renderer = node.playlistVideoRenderer;
+        let title = '';
+        if (renderer.title) title = renderer.title.simpleText || (renderer.title.runs || []).map((run) => run.text).join('');
+        items.push({ video_id: renderer.videoId, title: title });
+      }
+      const token = node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token;
+      if (token) next = token;
+      Object.values(node).forEach(walk);
+    };
+    walk(parsed);
+    return { ok: response.ok, status: response.status, items: items, continuation: next };
+  } catch (error) {
+    return { ok: false, status: 0, items: [], error: String(error) };
+  }
+})()"#,
+    );
+    js
+}
+
+/// Watch Later 추가/삭제 요청 본문.
+pub fn watch_later_edit_body(video_id: &str, add: bool) -> Value {
+    if add {
+        json!({
+            "playlistId": WATCH_LATER_PLAYLIST_ID,
+            "actions": [{"action": "ACTION_ADD_VIDEO", "addedVideoId": video_id}],
+        })
+    } else {
+        json!({
+            "playlistId": WATCH_LATER_PLAYLIST_ID,
+            "actions": [{"action": "ACTION_REMOVE_VIDEO_BY_VIDEO_ID", "removedVideoId": video_id}],
+        })
+    }
+}
+
 /// 구독 추가 엔드포인트.
 pub const SUBSCRIBE_ENDPOINT: &str = "/youtubei/v1/subscription/subscribe";
 /// 플레이리스트 생성 엔드포인트.

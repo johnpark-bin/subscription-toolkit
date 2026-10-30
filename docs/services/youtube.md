@@ -40,7 +40,7 @@ stk quota show
 | 플레이리스트와 항목 | 가능 | `playlists.insert` + `playlistItems.insert`로 복사한다(항목 5,000개 상한) |
 | 좋아요 | 부분 | API 조회가 최근 1,000개까지만 제공되므로 그 범위만 복사된다 |
 | 시청기록 | 부분 | API 읽기/쓰기가 없어 Takeout 리포트와 비공개 플레이리스트 재현으로만 대체한다 |
-| Watch Later(나중에 볼 동영상) | 불가 | API 접근이 막혀 있고 Takeout 내보내기에서도 제외된다 |
+| Watch Later(나중에 볼 동영상) | 브라우저 모드만 | API·Takeout 불가. `stk browser watch-later`로 원본을 내보내 대상에 반영한다(API 쿼터 없음) |
 | 업로드 영상 | 불가 | 채널 소유 자산이라 계정 사이를 옮기는 API가 없다 |
 | 댓글 | 불가 | 작성자 계정에 귀속되며 대량 쓰기 API가 없다 |
 | 멤버십 | 불가 | 계정 종속 상품이라 이전할 수 없다 |
@@ -157,7 +157,26 @@ stk browser sync subscriptions --port 9222 --dry-run
 stk browser sync subscriptions --port 9222 --limit 20 --yes
 ```
 
-## 7. 자동화
+## 7. Watch Later 동기화
+
+API와 Takeout으로는 옮길 수 없고, 브라우저 세션에서만 가능하다.
+
+```bash
+# 원본 계정 Chrome(예: 9223)에서 로그인 후
+stk browser watch-later export --port 9223
+
+# 대상 계정 Chrome(예: 9222)에 반영
+stk browser watch-later sync --port 9222 --dry-run
+stk browser watch-later sync --port 9222 --yes
+# 대상에만 있는 항목까지 원본과 같게 만들려면
+stk browser watch-later sync --port 9222 --prune --yes
+```
+
+- 추가는 원본의 오래된 항목부터 수행해 최신순 표시를 맞춘다. 다만 부분 동기화 후에는 순서가 어긋날 수 있다(위치 지정 API 없음).
+- `--prune`은 대상에만 있는 항목을 삭제한다. 원본 내보내기 파일이 비어 있으면 안전을 위해 중단한다.
+- 자세한 준비·문제 해결은 [브라우저 세션 실행](../browser-mode.md)을 따른다.
+
+## 8. 자동화
 
 여러 날 반복 실행을 스케줄러에 맡기는 방법은 [무인 반복 실행](../automation.md)을 따른다.
 

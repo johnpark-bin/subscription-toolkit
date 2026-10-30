@@ -86,6 +86,11 @@ impl Paths {
         self.data_dir().join("history.json")
     }
 
+    /// 브라우저로 내보낸 Watch Later 목록.
+    pub fn watch_later(&self) -> PathBuf {
+        self.data_dir().join("watch-later.json")
+    }
+
     /// 이전 계획.
     pub fn plan(&self) -> PathBuf {
         self.data_dir().join("plan.json")

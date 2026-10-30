@@ -14,6 +14,9 @@ use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
 use crate::browser::cdp::CdpClient;
 use crate::browser::sync::{BrowserSyncOptions, sync_actions, verify_account};
+use crate::browser::watch_later::{
+    WatchLaterFile, plan_watch_later, read_watch_later, sync_watch_later,
+};
 use crate::config::OAuthConfig;
 use crate::error::AppError;
 use crate::history::{self, HistoryFile};
@@ -239,6 +242,15 @@ pub enum BrowserCommand {
         #[arg(long)]
         expect_channel: Option<String>,
     },
+    /// Watch Later(나중에 볼 동영상)를 브라우저 세션으로 내보내고 동기화합니다.
+    #[command(
+        help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+    )]
+    WatchLater {
+        /// Watch Later 하위 명령.
+        #[command(subcommand)]
+        command: WatchLaterCommand,
+    },
     /// 저장된 계획을 브라우저 세션으로 실행합니다.
     #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
     Sync {
@@ -263,6 +275,55 @@ pub enum BrowserCommand {
         /// 확인 없이 실행합니다.
         #[arg(long)]
         yes: bool,
+        /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
+        #[arg(long)]
+        skip_account_check: bool,
+    },
+}
+
+/// Watch Later 하위 명령.
+#[derive(Debug, Subcommand)]
+#[command(
+    help_template = "{about-with-newline}\n사용법: {usage}\n\n명령:\n{subcommands}\n\n옵션:\n{options}"
+)]
+pub enum WatchLaterCommand {
+    /// 원본 계정의 Watch Later를 파일로 내보냅니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Export {
+        /// 원본 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9223)]
+        port: u16,
+        /// 저장 경로(기본: data/watch-later.json).
+        #[arg(long)]
+        out: Option<PathBuf>,
+        /// 기대하는 채널 ID(기본: 계획의 원본 채널).
+        #[arg(long)]
+        expect_channel: Option<String>,
+    },
+    /// 내보낸 목록을 대상 계정의 Watch Later에 반영합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Sync {
+        /// 대상 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        port: u16,
+        /// 최대 추가 개수.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 액션 사이 최소 대기(ms).
+        #[arg(long, default_value_t = 3_000)]
+        delay_ms: u64,
+        /// 최소 대기에 더할 무작위 폭(ms).
+        #[arg(long, default_value_t = 1_500)]
+        jitter_ms: u64,
+        /// 실제 쓰기 없이 차이만 확인합니다.
+        #[arg(long)]
+        dry_run: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
+        /// 대상에만 있는 항목을 삭제합니다(원본과 동일하게 맞춤).
+        #[arg(long)]
+        prune: bool,
         /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
         #[arg(long)]
         skip_account_check: bool,
@@ -859,6 +920,164 @@ async fn history_command(
     }
 }
 
+async fn watch_later_command(paths: &Paths, command: WatchLaterCommand) -> Result<i32, AppError> {
+    let now = Utc::now();
+    match command {
+        WatchLaterCommand::Export {
+            port,
+            out,
+            expect_channel,
+        } => {
+            let plan_channel = load_plan(paths, now)?.map(|plan| plan.source.channel.id);
+            let expected = expect_channel.or(plan_channel).unwrap_or_default();
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            let account = verify_account(&mut cdp, &expected).await?;
+            let items = read_watch_later(&mut cdp, 50).await?;
+            cdp.close().await;
+
+            let file = WatchLaterFile {
+                exported_at: now,
+                channel_id: account["channel_id"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                items,
+            };
+            let path = out.unwrap_or_else(|| paths.watch_later());
+            let payload = serde_json::to_vec_pretty(&file)
+                .map_err(|error| AppError::json("Watch Later를 직렬화할 수 없습니다", error))?;
+            if let Some(parent) = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+            {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    AppError::io(
+                        format!("디렉터리를 만들 수 없습니다: {}", parent.display()),
+                        error,
+                    )
+                })?;
+            }
+            std::fs::write(&path, payload).map_err(|error| {
+                AppError::io(
+                    format!("Watch Later를 쓸 수 없습니다: {}", path.display()),
+                    error,
+                )
+            })?;
+            println!(
+                "Watch Later {}건을 내보냈습니다: 채널 {}",
+                file.items.len(),
+                file.channel_id
+            );
+            eprintln!("저장 위치: {}", path.display());
+            Ok(0)
+        }
+        WatchLaterCommand::Sync {
+            port,
+            limit,
+            delay_ms,
+            jitter_ms,
+            dry_run,
+            yes,
+            prune,
+            skip_account_check,
+        } => {
+            let path = paths.watch_later();
+            let raw = std::fs::read_to_string(&path).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    AppError::Usage(
+                        "Watch Later 내보내기 파일이 없습니다. `stk browser watch-later export --port <원본 포트>`를 먼저 실행하세요."
+                            .to_string(),
+                    )
+                } else {
+                    AppError::io(
+                        format!("Watch Later 파일을 읽을 수 없습니다: {}", path.display()),
+                        error,
+                    )
+                }
+            })?;
+            let file: WatchLaterFile = serde_json::from_str(&raw).map_err(|error| {
+                AppError::json(
+                    format!("Watch Later 파일을 해석할 수 없습니다: {}", path.display()),
+                    error,
+                )
+            })?;
+            let opts = BrowserSyncOptions {
+                delay: Duration::from_millis(delay_ms),
+                jitter: Duration::from_millis(jitter_ms),
+                retry_base: Duration::from_secs(5),
+                limit,
+            };
+
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                let expected = load_plan(paths, now)?
+                    .map(|plan| plan.target.channel.id)
+                    .unwrap_or_default();
+                verify_account(&mut cdp, &expected).await?;
+            }
+
+            let target = read_watch_later(&mut cdp, 50).await?;
+            let target_ids: std::collections::HashSet<String> =
+                target.iter().map(|item| item.video_id.clone()).collect();
+            let source_ids: std::collections::HashSet<String> = file
+                .items
+                .iter()
+                .map(|item| item.video_id.clone())
+                .collect();
+            let to_add = plan_watch_later(&file.items, &target_ids, limit);
+            let to_remove = if prune {
+                target
+                    .iter()
+                    .filter(|item| !source_ids.contains(&item.video_id))
+                    .count()
+            } else {
+                0
+            };
+
+            if dry_run {
+                cdp.close().await;
+                println!(
+                    "Watch Later 차이: 원본 {} · 대상 {} · 추가 {} · 삭제 {}",
+                    file.items.len(),
+                    target.len(),
+                    to_add.len(),
+                    to_remove
+                );
+                for item in to_add.iter().take(5) {
+                    println!("+ {}", item.video_id);
+                }
+                return Ok(0);
+            }
+
+            let prompt = format!(
+                "Watch Later에 {}건 추가{}. 대상 계정 상태가 바뀝니다.",
+                to_add.len(),
+                if prune {
+                    format!(", {}건 삭제", to_remove)
+                } else {
+                    String::new()
+                }
+            );
+            if !confirm(&prompt, yes)? {
+                cdp.close().await;
+                eprintln!("취소했습니다.");
+                return Ok(0);
+            }
+
+            let mut journal = Journal::open(paths, now)?;
+            let report =
+                sync_watch_later(&mut cdp, &file.items, &mut journal, &opts, prune, now).await?;
+            cdp.close().await;
+            print!("{}", report.render());
+            Ok(0)
+        }
+    }
+}
+
 async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, AppError> {
     match command {
         BrowserCommand::Check {
@@ -883,6 +1102,7 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
             );
             Ok(0)
         }
+        BrowserCommand::WatchLater { command } => watch_later_command(paths, command).await,
         BrowserCommand::Sync {
             kind,
             port,
@@ -1145,6 +1365,7 @@ fn purge_command(paths: &Paths, tokens: bool, yes: bool) -> Result<i32, AppError
     let files = [
         paths.snapshot(),
         paths.history(),
+        paths.watch_later(),
         paths.plan(),
         paths.journal(),
         paths.quota(),

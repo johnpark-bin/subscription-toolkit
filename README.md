@@ -38,6 +38,8 @@ stk quota sync --used <콘솔 사용량> [--budget N] [--write-cost N]
 
 stk browser check --port 9222
 stk browser sync <subscriptions|playlists|likes|all> --port 9222 [--limit N] [--delay-ms 3000] [--jitter-ms 1500] [--dry-run] [--yes]
+stk browser watch-later export --port 9223 [--expect-channel <id>] [--out <path>]
+stk browser watch-later sync --port 9222 [--limit N] [--prune] [--dry-run] [--yes]
 
 stk history import --takeout <dir|zip>
 stk history report [--top 20] [--format markdown|json] [--out <path>]
@@ -51,7 +53,7 @@ stk purge [--tokens] [--yes]
 - `push all` 순서: 구독 → 플레이리스트 → 좋아요. 시청기록은 Takeout이 필요하므로 `history playlist`로 따로 실행한다.
 - `migrate`: 계획 → 확인 → 구독 → 플레이리스트 → 좋아요 실행을 한 번에 처리한다. 매일 반복할 때 쓰는 기본 명령이다.
 - `status`: 저장된 계획과 journal을 비교해 유형별 완료/남은 수, 남은 쿼터, 예상 일수를 보여준다.
-- `browser`: OAuth API 대신 사용자가 로그인한 Chrome에 CDP로 붙어 동기화를 실행하는 별도 백엔드다. 실행은 `scripts/browser-chrome.sh`로 전용 프로필을 띄운 뒤 로그인해서 쓴다. 계획·journal만 공유하며, 준비와 제약은 [docs/browser-mode.md](docs/browser-mode.md)를 따른다.
+- `browser`: OAuth API 대신 사용자가 로그인한 Chrome에 CDP로 붙어 동기화를 실행하는 별도 백엔드다. 실행은 `scripts/browser-chrome.sh`로 전용 프로필을 띄운 뒤 로그인해서 쓴다. Watch Later는 API·Takeout으로 옮길 수 없어 이 경로(`browser watch-later`)로만 동기화한다. 계획·journal만 공유하며, 준비와 제약은 [docs/browser-mode.md](docs/browser-mode.md)를 따른다.
 - `history playlist`: 최신 시청 순, 고유 videoId, 최대 5,000개, 비공개 플레이리스트. 같은 이름의 플레이리스트가 대상에 있으면 재사용하고 기존 항목은 건너뛴다.
 
 쓰기 전에는 건수와 예상 쿼터를 보여주고 `yes` 입력을 받는다. `--yes`로 생략할 수 있으며, 표준 입력이 TTY가 아니면 `--yes`가 필수다(없으면 종료 코드 2).
@@ -98,6 +100,7 @@ tokens/source.json         원본 계정 토큰(0600)
 tokens/target.json         대상 계정 토큰(0600)
 data/source/snapshot.json  원본 스냅샷(24시간 캐시)
 data/history.json          정규화한 시청기록
+data/watch-later.json      브라우저로 내보낸 Watch Later 목록
 data/plan.json             이전 계획
 data/journal.jsonl         실행 journal(재개용)
 data/quota.json            태평양 날짜 기준 쿼터 장부

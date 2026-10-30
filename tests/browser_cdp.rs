@@ -553,3 +553,147 @@ async fn add_item_without_mapping_fails_fast() {
     assert!(error.to_string().contains("대상 플레이리스트 ID"));
     assert!(fake.expressions.lock().expect("잠금").is_empty());
 }
+
+fn wl(id: &str) -> subscription_toolkit::browser::WatchLaterItem {
+    subscription_toolkit::browser::WatchLaterItem {
+        video_id: id.to_string(),
+        title: format!("영상 {id}"),
+    }
+}
+
+#[tokio::test]
+async fn watch_later_adds_missing_items_in_reverse_order() {
+    let harness = harness();
+    let fake = start_fake(vec![
+        json!({"ok": true, "status": 200, "items": [{"video_id": "KEEP", "title": "유지"}], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+
+    let report = subscription_toolkit::browser::sync_watch_later(
+        &mut cdp,
+        &[wl("A"), wl("B"), wl("KEEP")],
+        &mut journal,
+        &fast_options(),
+        false,
+        now(),
+    )
+    .await
+    .expect("Watch Later 동기화 실패");
+
+    assert_eq!(report.added, 2);
+    assert_eq!(report.skipped, 1);
+
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert!(
+        expressions[0].contains("VLWL"),
+        "먼저 대상 Watch Later를 읽는다"
+    );
+    assert!(expressions[1].contains(r#""playlistId":"WL""#));
+    assert!(
+        expressions[1].contains(r#""addedVideoId":"B""#),
+        "오래된 항목부터 추가"
+    );
+    assert!(expressions[2].contains(r#""addedVideoId":"A""#));
+
+    let journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+    assert!(journal.is_complete("watch-later:A"));
+    assert!(journal.is_complete("watch-later:B"));
+}
+
+#[tokio::test]
+async fn watch_later_prune_removes_target_only_items() {
+    let harness = harness();
+    let fake = start_fake(vec![
+        json!({"ok": true, "status": 200, "items": [{"video_id": "A", "title": "a"}, {"video_id": "EXTRA", "title": "x"}], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+
+    let report = subscription_toolkit::browser::sync_watch_later(
+        &mut cdp,
+        &[wl("A")],
+        &mut journal,
+        &fast_options(),
+        true,
+        now(),
+    )
+    .await
+    .expect("prune 실패");
+
+    assert_eq!(report.added, 0);
+    assert_eq!(report.removed, 1);
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert!(expressions[1].contains("ACTION_REMOVE_VIDEO_BY_VIDEO_ID"));
+    assert!(expressions[1].contains(r#""removedVideoId":"EXTRA""#));
+}
+
+#[tokio::test]
+async fn watch_later_skips_journaled_adds() {
+    let harness = harness();
+    let fake = start_fake(vec![
+        json!({"ok": true, "status": 200, "items": [], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+    journal
+        .record("watch-later:B", JournalStatus::Success, None, now())
+        .expect("기록 실패");
+
+    let report = subscription_toolkit::browser::sync_watch_later(
+        &mut cdp,
+        &[wl("A"), wl("B")],
+        &mut journal,
+        &fast_options(),
+        false,
+        now(),
+    )
+    .await
+    .expect("동기화 실패");
+
+    assert_eq!(report.added, 1);
+    assert_eq!(report.already_done, 1);
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert_eq!(expressions.len(), 2, "읽기 1회 + 추가 1회");
+    assert!(expressions[1].contains(r#""addedVideoId":"A""#));
+}
+
+#[tokio::test]
+async fn watch_later_refuses_prune_with_empty_source() {
+    let harness = harness();
+    let fake = start_fake(vec![]).await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+
+    let error = subscription_toolkit::browser::sync_watch_later(
+        &mut cdp,
+        &[],
+        &mut journal,
+        &fast_options(),
+        true,
+        now(),
+    )
+    .await
+    .expect_err("빈 원본으로 prune하면 안 된다");
+    assert_eq!(error.exit_code(), 2);
+    assert!(error.to_string().contains("원본 Watch Later 목록이 비어"));
+    assert!(
+        fake.expressions.lock().expect("잠금").is_empty(),
+        "읽기도 하지 않는다"
+    );
+}

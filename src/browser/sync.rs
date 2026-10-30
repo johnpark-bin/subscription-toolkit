@@ -110,7 +110,7 @@ pub async fn verify_account(
     Ok(account)
 }
 
-async fn send(
+pub(crate) async fn send(
     cdp: &mut CdpClient,
     endpoint: &str,
     body: &Value,
@@ -140,7 +140,7 @@ fn clip(text: &str) -> String {
     clipped
 }
 
-fn failure(key: &str, response: &PageResponse) -> AppError {
+pub(crate) fn failure(key: &str, response: &PageResponse) -> AppError {
     if response.is_auth_problem() {
         AppError::Auth(format!(
             "{key}: 브라우저 세션이 만료되었거나 권한이 없습니다(HTTP {}). Chrome에서 다시 로그인하세요.",

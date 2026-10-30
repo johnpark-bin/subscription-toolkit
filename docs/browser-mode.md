@@ -62,10 +62,34 @@ stk browser sync likes         --port 9222 --limit 50 --yes
 - 쿼터 장부(`data/quota.json`)는 쓰지 않는다. 브라우저 모드는 Google Cloud 쿼터를 소비하지 않는다.
 - 진행률은 TTY에서 요약만 출력하고, 완료 후 `stk status`로 확인한다.
 
+## Watch Later(나중에 볼 동영상)
+
+API와 Takeout에서 빠지는 항목이라 브라우저 세션으로만 동기화한다. 검증된 동작:
+
+| 동작 | 요청 | 결과 |
+| --- | --- | --- |
+| 조회 | `browse(browseId=VLWL)` | `playlistVideoRenderer.videoId` 목록(continuation 지원) |
+| 추가 | `browse/edit_playlist` + `playlistId=WL`, `ACTION_ADD_VIDEO` | `STATUS_SUCCEEDED` |
+| 삭제 | `ACTION_REMOVE_VIDEO_BY_VIDEO_ID` | `STATUS_SUCCEEDED` |
+
+```bash
+# 원본 계정 Chrome(다른 포트/프로필)에서 로그인 후
+stk browser watch-later export --port 9223
+stk browser watch-later sync --port 9222 --dry-run
+stk browser watch-later sync --port 9222 --yes
+stk browser watch-later sync --port 9222 --prune --yes   # 대상 전용 항목 삭제
+```
+
+- `export`는 기본적으로 계획의 원본 채널과 세션이 일치하는지 확인한다. 다른 계정에서 내보내려면 `--expect-channel`을 지정한다.
+- 추가는 원본의 오래된 항목부터 수행해 최신순 표시를 맞춘다. Watch Later에는 위치 지정 API가 없어 부분 동기화 후 순서는 완전히 같지 않을 수 있다.
+- `--prune`은 원본에 없는 대상 항목을 삭제한다. 내보낸 파일이 비어 있으면 안전을 위해 실행하지 않는다.
+- journal 키는 `watch-later:{video_id}`, 삭제는 `watch-later-remove:{video_id}`로 기록되어 재실행 시 중복 작업을 하지 않는다.
+
 ## 제약
 
 - 원본 데이터 읽기는 아직 OAuth/Takeout 경로만 지원한다. 브라우저로 원본 구독/재생목록을 직접 읽는 기능은 없다.
 - 시청기록은 API/브라우저로 옮길 수 없어 Takeout 기반(`stk history`)만 지원한다.
+- Watch Later는 브라우저 모드에서만 지원한다(API·Takeout 불가).
 - 재생 순서 보정은 하지 않는다. 계획 순서대로 추가만 하며, 재생목록 UI에서 수동 확인이 필요하다.
 - 좋아요/구독의 UI 반영은 페이지 새로고침 후 확인된다.
 - 페이지 구조나 내부 엔드포인트가 바뀌면 실패할 수 있다. 실패 시 journal에는 아무 것도 기록되지 않으므로, 원인을 고친 뒤 같은 명령을 다시 실행하면 된다.
