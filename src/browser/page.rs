@@ -8,6 +8,11 @@ use serde_json::{Value, json};
 
 use crate::browser::cdp::{CdpError, PageResponse};
 
+/// YouTube 일반 페이지(요청 실행은 이 오리진에서 한다).
+pub const YOUTUBE_URL: &str = "https://www.youtube.com/";
+/// 채널 ID를 노출하는 Studio 페이지(계정 확인용).
+pub const STUDIO_URL: &str = "https://studio.youtube.com/";
+
 /// 구독 추가 엔드포인트.
 pub const SUBSCRIBE_ENDPOINT: &str = "/youtubei/v1/subscription/subscribe";
 /// 플레이리스트 생성 엔드포인트.

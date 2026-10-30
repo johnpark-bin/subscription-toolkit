@@ -99,6 +99,8 @@ pub async fn verify_account(
             "브라우저 세션의 채널이 다릅니다(현재 {channel}, 기대 {expected_channel_id}). 올바른 계정으로 로그인한 Chrome 포트인지 확인하세요."
         )));
     }
+    // 요청은 www.youtube.com 오리진에서 보내야 CORS를 통과한다.
+    cdp.navigate(page::YOUTUBE_URL).await.map_err(cdp_error)?;
     Ok(account)
 }
 
