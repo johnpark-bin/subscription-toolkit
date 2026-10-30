@@ -346,6 +346,37 @@ async fn creates_playlist_and_uses_returned_id_for_items() {
 }
 
 #[tokio::test]
+async fn creates_playlist_when_id_appears_late_in_big_response() {
+    let harness = harness();
+    // 실제 응답은 responseContext가 앞에 길게 붙어 playlistId가 600자 뒤에 온다.
+    let padding = "x".repeat(800);
+    let body =
+        format!("{{\"responseContext\":{{\"padding\":\"{padding}\"}},\"playlistId\":\"PL_LATE\"}}");
+    let fake = start_fake(vec![json!({"ok": true, "status": 200, "body": body})]).await;
+
+    let report = run(
+        &harness,
+        &fake,
+        &[create_playlist("PL_SRC", "Broadcasting")],
+        fast_options(),
+    )
+    .await
+    .expect("본문이 길어도 playlistId를 읽어야 한다");
+
+    assert_eq!(
+        report.target_playlists,
+        vec![("PL_SRC".to_string(), "PL_LATE".to_string())]
+    );
+    let journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+    let entry = journal
+        .entries()
+        .iter()
+        .find(|entry| entry.key == "playlist:PL_SRC")
+        .expect("생성 기록");
+    assert_eq!(entry.detail, Some(json!({"target_playlist_id": "PL_LATE"})));
+}
+
+#[tokio::test]
 async fn skips_actions_already_in_journal() {
     let harness = harness();
     let fake = start_fake(vec![json!({"ok": true, "status": 200, "body": "{}"})]).await;
