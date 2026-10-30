@@ -122,7 +122,9 @@ impl HttpYouTube {
                 continue;
             }
 
-            let retryable = matches!(error, ApiError::RateLimited(_)) || status >= 500;
+            // 409(SERVICE_UNAVAILABLE/ABORTED)는 YouTube가 간헐적으로 돌려주는 일시 오류다.
+            let retryable =
+                matches!(error, ApiError::RateLimited(_)) || status >= 500 || status == 409;
             if retryable && attempt < MAX_ATTEMPTS {
                 let delay = self.retry_base * 2u32.pow(attempt);
                 tokio::time::sleep(delay).await;

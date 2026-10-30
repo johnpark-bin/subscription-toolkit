@@ -221,6 +221,40 @@ async fn retry_after_429_then_succeeds() {
 }
 
 #[tokio::test]
+async fn retries_aborted_playlist_insert() {
+    let server = MockServer::start().await;
+    let sequence = Sequence::new(vec![
+        json_response(
+            409,
+            json!({
+                "error": {
+                    "code": 409,
+                    "message": "The operation was aborted.",
+                    "errors": [{"domain": "youtube.CoreErrorDomain", "reason": "SERVICE_UNAVAILABLE"}],
+                    "status": "ABORTED",
+                }
+            }),
+        ),
+        json_response(200, json!({"id": "PI_NEW"})),
+    ]);
+    Mock::given(method("POST"))
+        .and(path(PLAYLIST_ITEMS_PATH))
+        .respond_with(sequence)
+        .mount(&server)
+        .await;
+
+    let api = static_client(&server);
+    api.add_playlist_item("PL_DST", "VID_1")
+        .await
+        .expect("409 ABORTED는 재시도 후 성공해야 한다");
+    assert_eq!(
+        server.received_requests().await.expect("요청 기록").len(),
+        2,
+        "409 후 한 번 재시도한다"
+    );
+}
+
+#[tokio::test]
 async fn unauthorized_refreshes_once() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
