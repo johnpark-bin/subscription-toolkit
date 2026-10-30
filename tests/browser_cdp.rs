@@ -39,6 +39,8 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
     let expressions = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&expressions);
     let mut queue: VecDeque<Value> = script.into();
+    let navigated: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let navigated_writer = Arc::clone(&navigated);
 
     tokio::spawn(async move {
         let Ok((stream, _)) = listener.accept().await else {
@@ -60,6 +62,14 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
             let Some(id) = request["id"].as_u64() else {
                 continue;
             };
+            if request["method"] == "Page.navigate" {
+                if let Some(url) = request["params"]["url"].as_str() {
+                    *navigated_writer.lock().expect("잠금") = Some(url.to_string());
+                }
+                let reply = json!({"id": id, "result": {"frameId": "F1"}});
+                let _ = ws.send(Message::Text(reply.to_string())).await;
+                continue;
+            }
             if request["method"] != "Runtime.evaluate" {
                 let reply = json!({"id": id, "result": {}});
                 let _ = ws.send(Message::Text(reply.to_string())).await;
@@ -71,7 +81,12 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
                 .to_string();
 
             // 페이지 로딩 확인은 스크립트 대기열을 소비하지 않고 즉시 완료로 답한다.
-            let value = if expression == "document.readyState" {
+            let value = if expression.contains("location.href") {
+                json!({
+                    "href": navigated.lock().expect("잠금").clone().unwrap_or_default(),
+                    "ready": "complete"
+                })
+            } else if expression == "document.readyState" {
                 json!("complete")
             } else {
                 recorder.lock().expect("잠금").push(expression);

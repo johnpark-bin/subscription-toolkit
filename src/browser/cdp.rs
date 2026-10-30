@@ -235,16 +235,28 @@ impl CdpClient {
         Ok(result["result"]["value"].clone())
     }
 
-    /// 페이지를 이동하고 로딩이 끝날 때까지 기다린다.
+    /// 페이지를 이동하고 새 문서의 로딩이 끝날 때까지 기다린다.
+    ///
+    /// `Page.navigate`는 즉시 반환하므로, 이전 문서의 `readyState`를 새 문서로 오인하지 않도록
+    /// `location.href`가 바뀌고 `complete`가 될 때까지 함께 확인한다.
     pub async fn navigate(&mut self, url: &str) -> Result<(), CdpError> {
         self.call("Page.navigate", json!({"url": url})).await?;
-        for _ in 0..50 {
+        let prefix = url.trim_end_matches('/').to_string();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if tokio::time::Instant::now() > deadline {
+                return Err(CdpError::Timeout("페이지 로딩".to_string()));
+            }
             tokio::time::sleep(Duration::from_millis(200)).await;
-            if self.evaluate("document.readyState").await?.as_str() == Some("complete") {
+            let state = self
+                .evaluate("({ href: location.href, ready: document.readyState })")
+                .await?;
+            let href = state["href"].as_str().unwrap_or_default();
+            let ready = state["ready"].as_str().unwrap_or_default();
+            if href.trim_end_matches('/').starts_with(&prefix) && ready == "complete" {
                 return Ok(());
             }
         }
-        Err(CdpError::Timeout("페이지 로딩".to_string()))
     }
 
     /// 세션을 닫는다.
