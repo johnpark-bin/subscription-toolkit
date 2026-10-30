@@ -95,7 +95,12 @@ pub fn request_js(endpoint: &str, body: &Value) -> String {
       body: JSON.stringify(payload),
     });
     const text = await response.text();
-    return { ok: response.ok, status: response.status, body: text.slice(0, 600) };
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: text.slice(0, 200000),
+      truncated: text.length > 200000,
+    };
   } catch (error) {
     return { ok: false, status: 0, error: String(error) };
   }

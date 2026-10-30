@@ -278,6 +278,9 @@ pub struct PageResponse {
     /// 스크립트 수준 오류 메시지.
     #[serde(default)]
     pub error: String,
+    /// 본문이 잘렸는지 여부.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 impl PageResponse {
@@ -370,6 +373,7 @@ mod tests {
             status: 401,
             body: String::new(),
             error: String::new(),
+            truncated: false,
         };
         assert!(auth.is_auth_problem());
         let limited = PageResponse {
@@ -377,6 +381,7 @@ mod tests {
             status: 429,
             body: String::new(),
             error: String::new(),
+            truncated: false,
         };
         assert!(limited.is_rate_limited());
         let server = PageResponse {
@@ -384,6 +389,7 @@ mod tests {
             status: 503,
             body: String::new(),
             error: String::new(),
+            truncated: false,
         };
         assert!(server.is_server_error());
     }

@@ -130,6 +130,16 @@ async fn send(
     }
 }
 
+fn clip(text: &str) -> String {
+    let limit = 300;
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let mut clipped: String = text.chars().take(limit).collect();
+    clipped.push('…');
+    clipped
+}
+
 fn failure(key: &str, response: &PageResponse) -> AppError {
     if response.is_auth_problem() {
         AppError::Auth(format!(
@@ -146,7 +156,8 @@ fn failure(key: &str, response: &PageResponse) -> AppError {
     } else {
         AppError::Config(format!(
             "{key}: HTTP {} — {}",
-            response.status, response.body
+            response.status,
+            clip(&response.body)
         ))
     }
 }
@@ -239,7 +250,8 @@ pub async fn sync_actions(
                     .ok_or_else(|| {
                         AppError::Config(format!(
                             "{}: 응답에 playlistId가 없습니다 — {}",
-                            action.key, response.body
+                            action.key,
+                            clip(&response.body)
                         ))
                     })?;
                 targets.insert(source_playlist_id.clone(), playlist_id.clone());
