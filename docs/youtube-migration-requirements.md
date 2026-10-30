@@ -81,6 +81,7 @@
 | 400/403 | `playlistOperationUnsupported` | 건너뜀 |
 | 400 | `manualSortRequired` | 순서 보정 중단, 수동 정렬 경고 |
 | 404 | `videoNotFound`, `playlistNotFound` | 건너뜀 |
+| 409 | `SERVICE_UNAVAILABLE`(status `ABORTED`) | YouTube가 간헐적으로 돌려주는 일시 오류. 최대 3회 재시도 후 실패 처리(종료 코드 1) |
 | 429/5xx | - | 최대 3회 지수 백오프(1s/2s/4s) 후 실패 처리(종료 코드 1) |
 
 ## 7. 멱등성과 재개
