@@ -40,6 +40,7 @@ stk browser check --port 9222 --expect-channel UCVxgiGLgVg7dHfz36aMRqRg
 - 출력: `브라우저 확인: 채널 UC... · 로그인됨 · 세션 0`
 - 로그인하지 않았으면 종료 코드 3과 함께 재로그인 안내가 나온다.
 - `--expect-channel`을 주면 다른 계정에 로그인한 경우 중단한다.
+- 채널 ID는 `studio.youtube.com`(채널 단위 페이지)에서 확인한 뒤, 요청 실행을 위해 `www.youtube.com`으로 돌아온다. 일반 시청 페이지의 `ytcfg`에는 `CHANNEL_ID`가 없기 때문이다.
 - Electron 앱(예: Obsidian)의 DevTools 포트에 붙으면 "Electron 앱입니다"로 즉시 실패한다.
 
 ## 실행
@@ -68,6 +69,7 @@ stk browser sync likes         --port 9222 --limit 50 --yes
 - 재생 순서 보정은 하지 않는다. 계획 순서대로 추가만 하며, 재생목록 UI에서 수동 확인이 필요하다.
 - 좋아요/구독의 UI 반영은 페이지 새로고침 후 확인된다.
 - 페이지 구조나 내부 엔드포인트가 바뀌면 실패할 수 있다. 실패 시 journal에는 아무 것도 기록되지 않으므로, 원인을 고친 뒤 같은 명령을 다시 실행하면 된다.
+- 생성(`playlist/create`)은 성공했지만 응답 해석 실패 등으로 journal에 기록되지 않을 수 있다. 이때는 `stk plan`을 다시 실행해 계획을 갱신하면, 제목이 같은 대상 플레이리스트를 재사용하므로 중복 생성되지 않는다(이 문서의 복구 절차).
 
 ## 문제 해결
 
