@@ -88,11 +88,17 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
                 .to_string();
 
             // 페이지 로딩 확인은 스크립트 대기열을 소비하지 않고 즉시 완료로 답한다.
-            let value = if expression.contains("location.href") {
+            let value = if expression.contains("location.ready") {
+                json!("complete")
+            } else if expression.contains("location.href")
+                && expression.contains("document.readyState")
+            {
                 json!({
                     "href": navigated.lock().expect("잠금").clone().unwrap_or_default(),
                     "ready": "complete"
                 })
+            } else if expression == "location.href" {
+                json!(navigated.lock().expect("잠금").clone().unwrap_or_default())
             } else if expression == "document.readyState" {
                 json!("complete")
             } else {

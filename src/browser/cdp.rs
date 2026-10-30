@@ -77,6 +77,17 @@ fn select_target(targets: &[TargetInfo]) -> Result<&TargetInfo, CdpError> {
         })
 }
 
+/// 이동이 끝났다고 볼 수 있는지 판단한다.
+///
+/// 같은 URL로 다시 이동한 경우(문서가 유지됨)와 리다이렉트(다른 호스트로 이동)를 모두 처리한다.
+fn navigation_accepted(before: &str, target: &str, href: &str, ready: &str) -> bool {
+    if ready != "complete" || href.is_empty() {
+        return false;
+    }
+    let target_prefix = target.trim_end_matches('/');
+    href.trim_end_matches('/').starts_with(target_prefix) || href != before
+}
+
 /// `/json/version` 응답.
 #[derive(Debug, Clone, Deserialize)]
 struct VersionInfo {
@@ -235,13 +246,21 @@ impl CdpClient {
         Ok(result["result"]["value"].clone())
     }
 
-    /// 페이지를 이동하고 새 문서의 로딩이 끝날 때까지 기다린다.
+    /// 페이지를 이동하고 새 문서가 로딩을 마칠 때까지 기다린다.
     ///
-    /// `Page.navigate`는 즉시 반환하므로, 이전 문서의 `readyState`를 새 문서로 오인하지 않도록
-    /// `location.href`가 바뀌고 `complete`가 될 때까지 함께 확인한다.
+    /// `Page.navigate`는 즉시 반환하므로 이전 문서를 새 문서로 오인하지 않도록,
+    /// 이동 전 URL과 비교해 문서가 실제로 바뀌었는지 확인한다. 리다이렉트(예: 로그인
+    /// 필요 시 accounts.google.com)도 정상 이동으로 처리하고, 로그인 여부는 상위
+    /// 계정 확인 단계에서 판단한다.
     pub async fn navigate(&mut self, url: &str) -> Result<(), CdpError> {
+        let before = self
+            .evaluate("location.href")
+            .await
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
         self.call("Page.navigate", json!({"url": url})).await?;
-        let prefix = url.trim_end_matches('/').to_string();
+
         let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         loop {
             if tokio::time::Instant::now() > deadline {
@@ -253,7 +272,7 @@ impl CdpClient {
                 .await?;
             let href = state["href"].as_str().unwrap_or_default();
             let ready = state["ready"].as_str().unwrap_or_default();
-            if href.trim_end_matches('/').starts_with(&prefix) && ready == "complete" {
+            if navigation_accepted(&before, url, href, ready) {
                 return Ok(());
             }
         }
@@ -324,6 +343,44 @@ mod tests {
         assert!(error.to_string().contains("Electron"));
 
         assert!(ensure_chrome_browser("", "").is_err());
+    }
+
+    #[test]
+    fn navigation_accepts_redirect_and_same_url() {
+        // 이전 문서가 아직 complete로 보이지만 대상도 아니고 URL도 그대로 → 대기
+        assert!(!navigation_accepted(
+            "https://www.youtube.com/",
+            "https://studio.youtube.com/",
+            "https://www.youtube.com/",
+            "complete"
+        ));
+        // 대상 도달
+        assert!(navigation_accepted(
+            "https://www.youtube.com/",
+            "https://studio.youtube.com/",
+            "https://studio.youtube.com/channel/UC1",
+            "complete"
+        ));
+        // 로그인 리다이렉트(다른 호스트)도 이동 완료로 본다
+        assert!(navigation_accepted(
+            "https://www.youtube.com/",
+            "https://studio.youtube.com/",
+            "https://accounts.google.com/ServiceLogin",
+            "complete"
+        ));
+        // 같은 URL로 다시 이동
+        assert!(navigation_accepted(
+            "https://www.youtube.com/",
+            "https://www.youtube.com/",
+            "https://www.youtube.com/",
+            "complete"
+        ));
+        assert!(!navigation_accepted(
+            "https://www.youtube.com/",
+            "https://studio.youtube.com/",
+            "https://studio.youtube.com/",
+            "loading"
+        ));
     }
 
     #[test]
