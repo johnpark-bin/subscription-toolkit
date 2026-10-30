@@ -6,11 +6,18 @@
 
 - 이 모드는 YouTube 웹앱이 쓰는 내부 엔드포인트를 호출한다. YouTube 서비스 약관은 자동화된 접근을 금지하고, 공식 자동화 경로는 YouTube Data API(OAuth)다. **약관 위반과 계정 제재 위험은 사용자 몫**이며, 대상 계정에는 일회용 계정을 쓰는 편이 안전하다.
 - 지문 위장, 자동화 탐지 우회, 사람처럼 보이는 행동 위장은 구현하지 않는다. 실제 Chrome에 그대로 붙어 요청만 자동화한다.
-- 과도한 요청을 피하기 위한 고정 지연(`--delay-ms`, 기본 3000ms)과 429/5xx 재시도(5s·10s·20s)만 넣었다.
+- 과도한 요청을 피하기 위한 페이싱만 넣었다. 액션 간격은 `--delay-ms`(기본 3000ms)에 `--jitter-ms`(기본 1500ms) 범위의 무작위 지터를 더해 요청이 일정 간격으로 몰리지 않게 한다. 429/5xx는 5s·10s·20s로 재시도한다. 이는 속도 제한 완화용이며, 지문·행동 위장은 하지 않는다.
 
 ## 준비
 
-1. **별도 프로필**로 Chrome을 실행한다(평소 프로필과 섞지 않는다).
+1. **별도 프로필**로 Chrome을 실행한다(평소 프로필과 섞지 않는다). 저장소의 도우미 스크립트를 쓰면 경로·포트·프로필이 고정된다.
+
+```bash
+scripts/browser-chrome.sh              # 포트 9222, 프로필 ~/.config/subscription-toolkit/chrome-target
+PORT=9223 scripts/browser-chrome.sh    # 원본 계정용 등 다른 포트
+```
+
+직접 실행하려면:
 
 ```bash
 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
@@ -43,6 +50,7 @@ stk browser check --port 9222 --expect-channel UCVxgiGLgVg7dHfz36aMRqRg
 stk plan                          # 차이/예상 쿼터 계산 (API 읽기)
 stk browser sync subscriptions --port 9222 --dry-run
 stk browser sync subscriptions --port 9222 --limit 20 --yes
+stk browser sync playlists    --port 9222 --delay-ms 3000 --jitter-ms 1500 --limit 50 --yes
 stk browser sync playlists     --port 9222 --yes
 stk browser sync likes         --port 9222 --limit 50 --yes
 ```
@@ -70,7 +78,7 @@ stk browser sync likes         --port 9222 --limit 50 --yes
 | `웹 페이지 탭을 찾지 못했습니다` | 탭이 없음 | Chrome 창에 탭을 하나 연다 |
 | `브라우저에 YouTube 로그인이 필요합니다` | 로그아웃 상태 | 해당 Chrome에서 로그인 |
 | `브라우저 세션의 채널이 다릅니다` | 다른 계정 로그인 | 계정을 바꾸거나 다른 프로필 사용 |
-| `요청이 제한되었습니다(HTTP 429)` | 요청 과다 | `--delay-ms`를 늘리고 시간을 두고 재실행 |
+| `요청이 제한되었습니다(HTTP 429)` | 요청 과다 | `--delay-ms`·`--jitter-ms`를 늘리고 시간을 두고 재실행 |
 | `CDP 응답 시간 초과` | 페이지가 멈춤 | 탭을 새로고침하고 재실행 |
 
 ## 참고
