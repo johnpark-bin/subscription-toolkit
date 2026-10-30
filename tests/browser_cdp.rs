@@ -377,6 +377,40 @@ async fn creates_playlist_when_id_appears_late_in_big_response() {
 }
 
 #[tokio::test]
+async fn uses_journal_playlist_mapping_from_previous_run() {
+    let harness = harness();
+    let fake = start_fake(vec![
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+
+    // 이전 실행에서 플레이리스트를 만들어 journal에만 매핑이 남은 상태.
+    let mut journal = Journal::open(&harness.paths, now()).expect("journal 열기 실패");
+    journal
+        .record(
+            "playlist:PL_SRC",
+            JournalStatus::Success,
+            Some(json!({"target_playlist_id": "PL_FROM_JOURNAL"})),
+            now(),
+        )
+        .expect("기록 실패");
+    drop(journal);
+
+    let report = run(
+        &harness,
+        &fake,
+        &[add_item("PL_SRC", "VID_1")],
+        fast_options(),
+    )
+    .await
+    .expect("journal 매핑으로 항목을 추가해야 한다");
+
+    assert_eq!(report.success, 1);
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert!(expressions[0].contains(r#""playlistId":"PL_FROM_JOURNAL""#));
+}
+
+#[tokio::test]
 async fn skips_actions_already_in_journal() {
     let harness = harness();
     let fake = start_fake(vec![json!({"ok": true, "status": 200, "body": "{}"})]).await;
