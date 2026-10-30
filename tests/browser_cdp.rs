@@ -69,11 +69,16 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
                 .as_str()
                 .unwrap_or_default()
                 .to_string();
-            recorder.lock().expect("잠금").push(expression);
 
-            let value = queue
-                .pop_front()
-                .unwrap_or_else(|| json!({"ok": true, "status": 200, "body": "{}"}));
+            // 페이지 로딩 확인은 스크립트 대기열을 소비하지 않고 즉시 완료로 답한다.
+            let value = if expression == "document.readyState" {
+                json!("complete")
+            } else {
+                recorder.lock().expect("잠금").push(expression);
+                queue
+                    .pop_front()
+                    .unwrap_or_else(|| json!({"ok": true, "status": 200, "body": "{}"}))
+            };
             let reply = json!({
                 "id": id,
                 "result": {"result": {"type": "object", "value": value}}
@@ -168,6 +173,69 @@ async fn run(
     let result = sync_actions(&mut cdp, actions, &mut journal, &mut targets, &opts, now()).await;
     let _ = harness.dir.path();
     result
+}
+
+#[tokio::test]
+async fn verify_account_accepts_matching_channel() {
+    let fake = start_fake(vec![json!({
+        "ok": true,
+        "logged_in": true,
+        "channel_id": "UC_DST",
+        "session_index": 0
+    })])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+
+    let account = subscription_toolkit::browser::verify_account(&mut cdp, "UC_DST")
+        .await
+        .expect("채널이 같으면 통과해야 한다");
+    assert_eq!(account["channel_id"], "UC_DST");
+    assert!(
+        fake.expressions
+            .lock()
+            .expect("잠금")
+            .iter()
+            .any(|expression| expression.contains("ytcfg")),
+        "계정 확인 스크립트를 실행해야 한다"
+    );
+}
+
+#[tokio::test]
+async fn verify_account_rejects_other_channel() {
+    let fake = start_fake(vec![json!({
+        "ok": true,
+        "logged_in": true,
+        "channel_id": "UC_OTHER"
+    })])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+
+    let error = subscription_toolkit::browser::verify_account(&mut cdp, "UC_DST")
+        .await
+        .expect_err("다른 채널은 거부해야 한다");
+    assert_eq!(error.exit_code(), 3);
+    assert!(error.to_string().contains("다릅니다"));
+}
+
+#[tokio::test]
+async fn verify_account_requires_login() {
+    let fake = start_fake(vec![
+        json!({"ok": true, "logged_in": false, "channel_id": null}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+
+    let error = subscription_toolkit::browser::verify_account(&mut cdp, "UC_DST")
+        .await
+        .expect_err("로그아웃 상태는 실패해야 한다");
+    assert_eq!(error.exit_code(), 3);
+    assert!(error.to_string().contains("로그인"));
 }
 
 #[tokio::test]
