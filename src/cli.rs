@@ -251,9 +251,12 @@ pub enum BrowserCommand {
         /// 데이터 유형별 최대 액션 수.
         #[arg(long)]
         limit: Option<usize>,
-        /// 액션 사이 대기(ms).
+        /// 액션 사이 최소 대기(ms).
         #[arg(long, default_value_t = 3_000)]
         delay_ms: u64,
+        /// 최소 대기에 더할 무작위 폭(ms). 0이면 고정 간격.
+        #[arg(long, default_value_t = 1_500)]
+        jitter_ms: u64,
         /// 실제 쓰기 없이 예정만 출력합니다.
         #[arg(long)]
         dry_run: bool,
@@ -885,6 +888,7 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
             port,
             limit,
             delay_ms,
+            jitter_ms,
             dry_run,
             yes,
             skip_account_check,
@@ -923,6 +927,7 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
                         .unwrap_or_else(|| "없음".to_string()),
                     delay_ms
                 );
+                println!("간격: 최소 {delay_ms}ms + 지터 0~{jitter_ms}ms");
                 for action in actions.iter().take(10) {
                     println!("- {}", action.key);
                 }
@@ -951,6 +956,7 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
             let mut targets = plan.playlist_targets.clone();
             let opts = BrowserSyncOptions {
                 delay: Duration::from_millis(delay_ms),
+                jitter: Duration::from_millis(jitter_ms),
                 retry_base: Duration::from_secs(5),
                 limit,
             };

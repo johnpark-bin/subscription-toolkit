@@ -5,6 +5,7 @@
 //! 제재 위험은 사용자가 감수한다.
 
 pub mod cdp;
+pub mod jitter;
 pub mod page;
 pub mod sync;
 

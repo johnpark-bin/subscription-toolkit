@@ -136,6 +136,7 @@ fn add_item(source_playlist_id: &str, video_id: &str) -> Action {
 fn fast_options() -> BrowserSyncOptions {
     BrowserSyncOptions {
         delay: std::time::Duration::ZERO,
+        jitter: std::time::Duration::ZERO,
         retry_base: std::time::Duration::from_millis(1),
         limit: None,
     }

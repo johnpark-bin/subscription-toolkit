@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::browser::cdp::{CdpClient, CdpError, PageResponse};
+use crate::browser::jitter::Jitter;
 use crate::browser::page;
 use crate::error::AppError;
 use crate::migrate::journal::{Journal, JournalStatus};
@@ -18,8 +19,10 @@ use crate::migrate::model::{Action, ActionKind, DataType};
 /// 브라우저 실행 옵션.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserSyncOptions {
-    /// 액션 사이 대기 시간.
+    /// 액션 사이 최소 대기 시간.
     pub delay: Duration,
+    /// 최소 대기에 더할 무작위 폭(0~jitter).
+    pub jitter: Duration,
     /// 재시도 기본 대기(2배씩 증가).
     pub retry_base: Duration,
     /// 데이터 유형별 최대 액션 수.
@@ -30,6 +33,7 @@ impl Default for BrowserSyncOptions {
     fn default() -> Self {
         Self {
             delay: Duration::from_millis(3_000),
+            jitter: Duration::from_millis(1_500),
             retry_base: Duration::from_secs(5),
             limit: None,
         }
@@ -150,6 +154,7 @@ pub async fn sync_actions(
 ) -> Result<BrowserSyncReport, AppError> {
     let mut report = BrowserSyncReport::default();
     let mut attempted: HashMap<DataType, u64> = HashMap::new();
+    let mut pacing = Jitter::from_clock();
     let mut first = true;
 
     for action in actions {
@@ -166,8 +171,11 @@ pub async fn sync_actions(
             continue;
         }
 
-        if !first && !opts.delay.is_zero() {
-            tokio::time::sleep(opts.delay).await;
+        if !first {
+            let delay = opts.delay + pacing.duration(opts.jitter);
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
         }
         first = false;
         *count += 1;
