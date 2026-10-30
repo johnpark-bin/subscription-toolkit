@@ -171,6 +171,14 @@ pub async fn sync_actions(
     opts: &BrowserSyncOptions,
     now: DateTime<Utc>,
 ) -> Result<BrowserSyncReport, AppError> {
+    // 이전 실행에서 만든 플레이리스트 매핑(journal 기록)을 복원한다.
+    // 계획이 오래되어 playlist_targets에 없어도 항목을 이어서 넣을 수 있다.
+    for (source, target) in journal.created_playlists() {
+        targets
+            .entry(source.clone())
+            .or_insert_with(|| target.clone());
+    }
+
     let mut report = BrowserSyncReport::default();
     let mut attempted: HashMap<DataType, u64> = HashMap::new();
     let mut pacing = Jitter::from_clock();
