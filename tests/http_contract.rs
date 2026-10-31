@@ -301,6 +301,14 @@ async fn like_accepts_empty_response() {
     let requests = server.received_requests().await.expect("요청 기록");
     assert_eq!(query_param(&requests[0], "id").as_deref(), Some("VID_1"));
     assert_eq!(query_param(&requests[0], "rating").as_deref(), Some("like"));
+    assert_eq!(
+        requests[0]
+            .headers
+            .get("content-length")
+            .and_then(|value| value.to_str().ok()),
+        Some("0"),
+        "본문 없는 POST에는 Content-Length: 0이 필요하다"
+    );
 }
 
 #[tokio::test]
