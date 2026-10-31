@@ -100,6 +100,9 @@ impl HttpYouTube {
                 .header(ACCEPT, "application/json");
             if let Some(body) = &body {
                 request = request.json(body);
+            } else if method != Method::GET {
+                // 본문 없는 POST(예: videos.rate)는 Content-Length: 0이 없으면 411로 거부된다.
+                request = request.header(reqwest::header::CONTENT_LENGTH, "0");
             }
 
             let response = request
