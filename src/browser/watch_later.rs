@@ -60,6 +60,11 @@ pub async fn read_watch_later(
     cdp: &mut CdpClient,
     max_pages: usize,
 ) -> Result<Vec<WatchLaterItem>, AppError> {
+    // 요청은 www.youtube.com 오리진에서 보내야 한다(Studio 탭이면 400).
+    cdp.navigate(page::YOUTUBE_URL)
+        .await
+        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+
     let mut items: Vec<WatchLaterItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut continuation: Option<String> = None;

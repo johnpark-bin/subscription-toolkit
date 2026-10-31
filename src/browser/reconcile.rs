@@ -38,6 +38,11 @@ async fn read_ids(
     max_pages: usize,
     label: &str,
 ) -> Result<Vec<WatchLaterItem>, AppError> {
+    // 페이지가 Studio 등 다른 오리진이면 요청이 교차 출처로 나가 400이 된다.
+    cdp.navigate(page::YOUTUBE_URL)
+        .await
+        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+
     let mut items: Vec<WatchLaterItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut continuation: Option<String> = None;
