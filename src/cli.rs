@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
 use crate::browser::cdp::CdpClient;
+use crate::browser::playlists::{copy_missing_playlists, read_target_playlists};
 use crate::browser::reconcile::{
     diff_missing, read_liked_videos, read_subscriptions, reconcile, reconcile_via_api,
 };
@@ -284,6 +285,28 @@ pub enum BrowserCommand {
         /// API 모드에서 오늘 사용할 쿼터 예산(units).
         #[arg(long)]
         budget: Option<u64>,
+        /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
+        #[arg(long)]
+        skip_account_check: bool,
+    },
+    /// 원본 재생목록 중 대상에 없는 제목만 복제합니다.
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    Playlists {
+        /// 대상 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        port: u16,
+        /// 액션 사이 최소 대기(ms).
+        #[arg(long, default_value_t = 3_000)]
+        delay_ms: u64,
+        /// 최소 대기에 더할 무작위 폭(ms).
+        #[arg(long, default_value_t = 1_500)]
+        jitter_ms: u64,
+        /// 실제 쓰기 없이 예정만 출력합니다.
+        #[arg(long)]
+        dry_run: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
         /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
         #[arg(long)]
         skip_account_check: bool,
@@ -1368,6 +1391,75 @@ async fn browser_command(
                     .await?
                 }
             };
+            print!("{}", report.render());
+            Ok(0)
+        }
+        BrowserCommand::Playlists {
+            port,
+            delay_ms,
+            jitter_ms,
+            dry_run,
+            yes,
+            skip_account_check,
+        } => {
+            let now = Utc::now();
+            let Some(plan) = load_plan(paths, now)? else {
+                return Err(AppError::Usage(
+                    "저장된 계획이 없습니다. `stk plan --refresh`를 먼저 실행하세요.".to_string(),
+                ));
+            };
+            let opts = BrowserSyncOptions {
+                delay: Duration::from_millis(delay_ms),
+                jitter: Duration::from_millis(jitter_ms),
+                retry_base: Duration::from_secs(5),
+                limit: None,
+            };
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                verify_account(&mut cdp, &plan.target.channel.id).await?;
+            }
+
+            if dry_run {
+                let target = read_target_playlists(&mut cdp, 50).await?;
+                let existing: std::collections::HashSet<String> =
+                    target.into_iter().map(|item| item.title).collect();
+                let titles = crate::migrate::plan::display_titles(&plan.source.playlists);
+                let mut missing = 0usize;
+                let mut items = 0usize;
+                for (playlist, (_, title)) in plan.source.playlists.iter().zip(titles) {
+                    if existing.contains(&title) {
+                        continue;
+                    }
+                    missing += 1;
+                    items += playlist
+                        .items
+                        .iter()
+                        .map(|item| item.video_id.as_str())
+                        .collect::<std::collections::HashSet<_>>()
+                        .len();
+                }
+                cdp.close().await;
+                println!(
+                    "재생목록 복제 예정: 생성 {missing}개 · 항목 {items}건 (대상 보유 {}개)",
+                    existing.len()
+                );
+                return Ok(0);
+            }
+
+            let prompt = format!(
+                "원본 재생목록 {}개 중 대상에 없는 제목만 생성하고 항목을 추가합니다.",
+                plan.source.playlists.len()
+            );
+            if !confirm(&prompt, yes)? {
+                cdp.close().await;
+                eprintln!("취소했습니다.");
+                return Ok(0);
+            }
+            let report =
+                copy_missing_playlists(&mut cdp, &plan.source.playlists, &opts, now).await?;
+            cdp.close().await;
             print!("{}", report.render());
             Ok(0)
         }

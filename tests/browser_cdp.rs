@@ -744,3 +744,71 @@ async fn reconcile_adds_only_missing_likes_and_subscriptions() {
     assert!(journal.is_complete("like:A"));
     assert!(journal.is_complete("subscription:UC_NEW"));
 }
+
+fn source_playlist(
+    id: &str,
+    title: &str,
+    video_ids: &[&str],
+) -> subscription_toolkit::youtube::Playlist {
+    subscription_toolkit::youtube::Playlist {
+        id: id.to_string(),
+        title: title.to_string(),
+        description: String::new(),
+        privacy: Privacy::Private,
+        items: video_ids
+            .iter()
+            .enumerate()
+            .map(
+                |(index, video_id)| subscription_toolkit::youtube::PlaylistItemRef {
+                    item_id: format!("PI_{index}"),
+                    video_id: (*video_id).to_string(),
+                    title: format!("영상 {video_id}"),
+                    position: index as u64,
+                },
+            )
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn playlist_copy_skips_existing_titles_and_creates_missing() {
+    let fake = start_fake(vec![
+        // 대상 재생목록: "음악" 보유
+        json!({"ok": true, "status": 200, "items": [{"video_id": "PL_X", "title": "음악"}], "continuation": null}),
+        // "여행" 생성
+        json!({"ok": true, "status": 200, "body": "{\"playlistId\":\"PL_NEW\"}"}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let source = vec![
+        source_playlist("PL_A", "음악", &["VID_1"]),
+        source_playlist("PL_B", "여행", &["VID_2", "VID_3"]),
+    ];
+
+    let report = subscription_toolkit::browser::copy_missing_playlists(
+        &mut cdp,
+        &source,
+        &fast_options(),
+        now(),
+    )
+    .await
+    .expect("복제 실패");
+
+    assert_eq!(report.created, 1);
+    assert_eq!(report.items_added, 2);
+    assert_eq!(report.skipped_playlists, 1);
+
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    assert!(
+        expressions[0].contains("FEplaylist_aggregation"),
+        "대상 목록을 먼저 읽는다"
+    );
+    assert!(expressions[1].contains(r#""title":"여행""#));
+    assert!(expressions[2].contains(r#""playlistId":"PL_NEW""#));
+    assert!(expressions[2].contains(r#""addedVideoId":"VID_2""#));
+    assert!(expressions[3].contains(r#""addedVideoId":"VID_3""#));
+}

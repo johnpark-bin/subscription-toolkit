@@ -330,6 +330,37 @@ pub fn subscriptions_read_js(continuation: Option<&str>) -> String {
     browse_reader_js("FEchannels", continuation, COLLECT_IDS_JS)
 }
 
+const COLLECT_PLAYLISTS_JS: &str = r#"
+    const walk = (node) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { node.forEach(walk); return; }
+      if (node.lockupViewModel && node.lockupViewModel.contentId) {
+        const vm = node.lockupViewModel;
+        const meta = vm.metadata && vm.metadata.lockupMetadataViewModel;
+        let title = '';
+        if (meta && meta.title && meta.title.content) title = meta.title.content;
+        items.push({ video_id: vm.contentId, title: title });
+      }
+      if (node.gridPlaylistRenderer && node.gridPlaylistRenderer.playlistId) {
+        const grid = node.gridPlaylistRenderer;
+        let title = '';
+        if (grid.title) title = grid.title.simpleText || (grid.title.runs || []).map((run) => run.text).join('');
+        items.push({ video_id: grid.playlistId, title: title });
+      }
+      const token = (node.continuationEndpoint && node.continuationEndpoint.continuationCommand && node.continuationEndpoint.continuationCommand.token)
+        || (node.continuationCommand && node.continuationCommand.token)
+        || (node.nextContinuationData && node.nextContinuationData.continuation);
+      if (token) next = token;
+      Object.values(node).forEach(walk);
+    };
+    walk(parsed);
+"#;
+
+/// 소유 재생목록(FEplaylist_aggregation) 목록을 읽는 스크립트.
+pub fn playlists_read_js(continuation: Option<&str>) -> String {
+    browse_reader_js("FEplaylist_aggregation", continuation, COLLECT_PLAYLISTS_JS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
