@@ -88,7 +88,9 @@ async fn start_fake(script: Vec<Value>) -> FakeCdp {
                 .to_string();
 
             // 페이지 로딩 확인은 스크립트 대기열을 소비하지 않고 즉시 완료로 답한다.
-            let value = if expression.contains("location.ready") {
+            let value = if expression.contains("INNERTUBE_API_KEY") {
+                json!(true)
+            } else if expression.contains("location.ready") {
                 json!("complete")
             } else if expression.contains("location.href")
                 && expression.contains("document.readyState")

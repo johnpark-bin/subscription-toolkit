@@ -278,6 +278,24 @@ impl CdpClient {
         }
     }
 
+    /// 페이지에서 INNERTUBE 설정(ytcfg)이 준비될 때까지 기다린다.
+    ///
+    /// 탐색 직후에는 문서가 complete여도 ytcfg가 아직 없을 수 있다.
+    pub async fn wait_for_ytcfg(&mut self) -> Result<(), CdpError> {
+        for _ in 0..25 {
+            let ready = self
+                .evaluate(
+                    "(() => !!(window.ytcfg && typeof window.ytcfg.get === 'function' && window.ytcfg.get('INNERTUBE_API_KEY')))()",
+                )
+                .await?;
+            if ready.as_bool() == Some(true) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
+        Err(CdpError::Timeout("YouTube 페이지 초기화".to_string()))
+    }
+
     /// 세션을 닫는다.
     pub async fn close(mut self) {
         let _ = self.ws.close(None).await;
