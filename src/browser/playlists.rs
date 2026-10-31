@@ -85,15 +85,21 @@ pub struct PlaylistCopyReport {
     pub items_added: u64,
     /// 제목이 이미 있어 건너뛴 재생목록 수.
     pub skipped_playlists: u64,
+    /// (원본 제목, 새 재생목록 ID) 목록.
+    pub created_playlists: Vec<(String, String)>,
 }
 
 impl PlaylistCopyReport {
     /// 사람이 읽는 요약.
     pub fn render(&self) -> String {
-        format!(
+        let mut out = format!(
             "재생목록 복제: 생성 {} · 항목 추가 {} · 제목 중복 건너뜀 {}\n",
             self.created, self.items_added, self.skipped_playlists
-        )
+        );
+        for (title, id) in &self.created_playlists {
+            out.push_str(&format!("  {title} → {id}\n"));
+        }
+        out
     }
 }
 
@@ -147,6 +153,9 @@ pub async fn copy_missing_playlists(
                 ))
             })?;
         report.created += 1;
+        report
+            .created_playlists
+            .push((display_title.clone(), playlist_id.clone()));
 
         let mut added: HashSet<&str> = HashSet::new();
         for item in &playlist.items {
@@ -190,10 +199,12 @@ mod tests {
             created: 2,
             items_added: 10,
             skipped_playlists: 3,
+            created_playlists: vec![("여행".to_string(), "PL_1".to_string())],
         };
         let text = report.render();
         assert!(text.contains("생성 2"));
         assert!(text.contains("항목 추가 10"));
         assert!(text.contains("건너뜀 3"));
+        assert!(text.contains("여행 → PL_1"));
     }
 }
