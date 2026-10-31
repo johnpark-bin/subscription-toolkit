@@ -67,10 +67,15 @@ stk browser sync likes         --port 9222 --limit 50 --yes
 API의 대상 상태는 브라우저로 만든 좋아요·구독을 늦게 반영하거나 일부만 반영한다. 이때 계획(`stk plan`) 기반 sync는 실제로는 이미 있는 항목을 다시 쓰려 하고, 빠진 항목은 놓친다. `browser reconcile`은 두 세션에서 직접 읽어 집합을 비교한다.
 
 ```bash
+# 원본 목록은 저장된 계획(API로 읽은 스냅샷)을 기본으로 쓴다
+stk browser reconcile --target-port 9222 --dry-run
+stk browser reconcile --target-port 9222 --types subscriptions --yes
+
+# 원본 브라우저 세션이 있으면 그쪽에서 직접 읽을 수도 있다
 stk browser reconcile --source-port 9223 --target-port 9222 --dry-run
-stk browser reconcile --types likes --yes
-stk browser reconcile --types subscriptions --yes
 ```
+
+- `--source-port`를 생략하면 `stk plan --refresh`로 저장한 원본 스냅샷(구독·좋아요)을 쓴다. API 읽기만 필요하고, 원본 브라우저 로그인 없이 동작한다. 스냅샷이 없으면 사용법 오류로 중단한다.
 
 - 좋아요는 `browse(VLLL)`, 구독은 `browse(FEchannels)`로 읽고, 빠진 항목만 `/like/like`·`/subscription/subscribe`로 추가한다.
 - journal 키는 `like:{video_id}`, `subscription:{channel_id}`로 계획 기반 실행과 공유하되, **대상 실측을 우선**한다(이전 성공 기록이 있어도 대상에 없으면 다시 시도).

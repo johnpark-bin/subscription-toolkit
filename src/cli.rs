@@ -246,9 +246,9 @@ pub enum BrowserCommand {
     /// 두 브라우저 세션을 비교해 빠진 좋아요·구독만 반영합니다.
     #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
     Reconcile {
-        /// 원본 계정 Chrome DevTools 포트.
-        #[arg(long, default_value_t = 9223)]
-        source_port: u16,
+        /// 원본 계정 Chrome DevTools 포트. 생략하면 저장된 계획의 원본 스냅샷을 쓴다.
+        #[arg(long)]
+        source_port: Option<u16>,
         /// 대상 계정 Chrome DevTools 포트.
         #[arg(long, default_value_t = 9222)]
         target_port: u16,
@@ -1169,41 +1169,69 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
                 limit,
             };
 
-            let mut source_cdp = CdpClient::attach(source_port)
-                .await
-                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
-            if !skip_account_check {
-                let expected = plan
-                    .as_ref()
-                    .map(|plan| plan.source.channel.id.clone())
-                    .unwrap_or_default();
-                verify_account(&mut source_cdp, &expected).await?;
-            }
             let want_likes = types.contains(&ReconcileType::Likes);
             let want_subs = types.contains(&ReconcileType::Subscriptions);
-            let source_likes = if want_likes {
-                Some(
-                    read_liked_videos(&mut source_cdp, 50)
-                        .await?
-                        .into_iter()
-                        .map(|item| item.video_id)
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                None
+            let (source_likes, source_subs) = match source_port {
+                Some(port) => {
+                    let mut source_cdp = CdpClient::attach(port)
+                        .await
+                        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+                    if !skip_account_check {
+                        let expected = plan
+                            .as_ref()
+                            .map(|plan| plan.source.channel.id.clone())
+                            .unwrap_or_default();
+                        verify_account(&mut source_cdp, &expected).await?;
+                    }
+                    let likes = if want_likes {
+                        Some(
+                            read_liked_videos(&mut source_cdp, 50)
+                                .await?
+                                .into_iter()
+                                .map(|item| item.video_id)
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        None
+                    };
+                    let subs = if want_subs {
+                        Some(
+                            read_subscriptions(&mut source_cdp, 50)
+                                .await?
+                                .into_iter()
+                                .map(|item| item.video_id)
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        None
+                    };
+                    source_cdp.close().await;
+                    (likes, subs)
+                }
+                None => {
+                    let Some(snapshot) = plan.as_ref().map(|plan| &plan.source) else {
+                        return Err(AppError::Usage(
+                            "--source-port를 생략하려면 저장된 계획이 필요합니다. `stk plan --refresh`를 먼저 실행하세요."
+                                .to_string(),
+                        ));
+                    };
+                    let likes = want_likes.then(|| {
+                        snapshot
+                            .likes
+                            .iter()
+                            .map(|item| item.video_id.clone())
+                            .collect::<Vec<_>>()
+                    });
+                    let subs = want_subs.then(|| {
+                        snapshot
+                            .subscriptions
+                            .iter()
+                            .map(|item| item.channel_id.clone())
+                            .collect::<Vec<_>>()
+                    });
+                    (likes, subs)
+                }
             };
-            let source_subs = if want_subs {
-                Some(
-                    read_subscriptions(&mut source_cdp, 50)
-                        .await?
-                        .into_iter()
-                        .map(|item| item.video_id)
-                        .collect::<Vec<_>>(),
-                )
-            } else {
-                None
-            };
-            source_cdp.close().await;
 
             let mut target_cdp = CdpClient::attach(target_port)
                 .await

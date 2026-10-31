@@ -162,7 +162,7 @@ stk browser sync subscriptions --port 9222 --limit 20 --yes
 API의 대상 상태가 실제와 어긋날 때(브라우저 실행분이 API 목록에 늦게 반영) 두 브라우저 세션을 직접 비교해 빠진 좋아요·구독만 채운다.
 
 ```bash
-stk browser reconcile --source-port 9223 --target-port 9222 --dry-run
+stk browser reconcile --target-port 9222 --dry-run   # 원본은 plan 스냅샷 사용
 stk browser reconcile --yes
 ```
 
