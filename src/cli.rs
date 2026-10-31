@@ -13,7 +13,9 @@ use serde_json::Value;
 use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
 use crate::browser::cdp::CdpClient;
-use crate::browser::reconcile::{diff_missing, read_liked_videos, read_subscriptions, reconcile};
+use crate::browser::reconcile::{
+    diff_missing, read_liked_videos, read_subscriptions, reconcile, reconcile_via_api,
+};
 use crate::browser::sync::{BrowserSyncOptions, sync_actions, verify_account};
 use crate::browser::watch_later::{
     WatchLaterFile, plan_watch_later, read_watch_later, sync_watch_later,
@@ -276,6 +278,12 @@ pub enum BrowserCommand {
         /// 확인 없이 실행합니다.
         #[arg(long)]
         yes: bool,
+        /// 쓰기 방식: cdp 또는 api.
+        #[arg(long, value_enum, default_value = "cdp", hide_possible_values = true)]
+        via: ReconcileVia,
+        /// API 모드에서 오늘 사용할 쿼터 예산(units).
+        #[arg(long)]
+        budget: Option<u64>,
         /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
         #[arg(long)]
         skip_account_check: bool,
@@ -317,6 +325,15 @@ pub enum BrowserCommand {
         #[arg(long)]
         skip_account_check: bool,
     },
+}
+
+/// 조정 시 쓰기 경로.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReconcileVia {
+    /// 브라우저 세션(CDP)으로 쓴다.
+    Cdp,
+    /// YouTube Data API로 쓴다(쿼터 사용).
+    Api,
 }
 
 /// 브라우저 비교 대상 유형.
@@ -505,7 +522,7 @@ async fn dispatch(cli: Cli) -> Result<i32, AppError> {
             yes,
         } => migrate_command(&paths, limit, budget, delay_ms, refresh, yes, write_cost).await,
         Command::Status { json } => status_command(&paths, json, write_cost).await,
-        Command::Browser { command } => browser_command(&paths, command).await,
+        Command::Browser { command } => browser_command(&paths, command, write_cost).await,
         Command::Quota { command } => quota_command(&paths, command, write_cost).await,
         Command::History { command } => history_command(&paths, command, write_cost).await,
         Command::Purge { tokens, yes } => purge_command(&paths, tokens, yes),
@@ -1125,7 +1142,11 @@ async fn watch_later_command(paths: &Paths, command: WatchLaterCommand) -> Resul
     }
 }
 
-async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, AppError> {
+async fn browser_command(
+    paths: &Paths,
+    command: BrowserCommand,
+    write_cost_flag: Option<u64>,
+) -> Result<i32, AppError> {
     match command {
         BrowserCommand::Check {
             port,
@@ -1158,6 +1179,8 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
             jitter_ms,
             dry_run,
             yes,
+            via,
+            budget,
             skip_account_check,
         } => {
             let now = Utc::now();
@@ -1291,17 +1314,60 @@ async fn browser_command(paths: &Paths, command: BrowserCommand) -> Result<i32, 
                 return Ok(0);
             }
 
-            let mut journal = Journal::open(paths, now)?;
-            let report = reconcile(
-                &mut target_cdp,
-                source_likes.as_deref(),
-                source_subs.as_deref(),
-                &mut journal,
-                &opts,
-                now,
-            )
-            .await?;
-            target_cdp.close().await;
+            let report = match via {
+                ReconcileVia::Cdp => {
+                    let mut journal = Journal::open(paths, now)?;
+                    let report = reconcile(
+                        &mut target_cdp,
+                        source_likes.as_deref(),
+                        source_subs.as_deref(),
+                        &mut journal,
+                        &opts,
+                        now,
+                    )
+                    .await?;
+                    target_cdp.close().await;
+                    report
+                }
+                ReconcileVia::Api => {
+                    let (budget, cost) = quota_context(paths, budget, write_cost_flag, now);
+                    let api = build_api(paths, Account::Target)?;
+                    let mut quota = QuotaLedger::open_with_cost(paths, budget, Some(cost), now)?;
+                    let target_likes: std::collections::HashSet<String> = if want_likes {
+                        read_liked_videos(&mut target_cdp, 50)
+                            .await?
+                            .into_iter()
+                            .map(|item| item.video_id)
+                            .collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                    let target_subs: std::collections::HashSet<String> = if want_subs {
+                        read_subscriptions(&mut target_cdp, 50)
+                            .await?
+                            .into_iter()
+                            .map(|item| item.video_id)
+                            .collect()
+                    } else {
+                        std::collections::HashSet::new()
+                    };
+                    target_cdp.close().await;
+                    let mut journal = Journal::open(paths, now)?;
+                    reconcile_via_api(
+                        api.as_ref(),
+                        &mut quota,
+                        source_likes.as_deref(),
+                        source_subs.as_deref(),
+                        &target_likes,
+                        &target_subs,
+                        &mut journal,
+                        limit,
+                        cost,
+                        now,
+                    )
+                    .await?
+                }
+            };
             print!("{}", report.render());
             Ok(0)
         }
