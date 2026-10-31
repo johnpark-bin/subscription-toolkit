@@ -14,6 +14,7 @@ pub mod watch_later;
 pub use cdp::{CdpClient, CdpError, PageResponse};
 pub use reconcile::{
     ReconcileReport, diff_missing, read_liked_videos, read_subscriptions, reconcile,
+    reconcile_via_api,
 };
 pub use sync::{BrowserSyncOptions, BrowserSyncReport, sync_actions, verify_account};
 pub use watch_later::{

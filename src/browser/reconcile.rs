@@ -17,6 +17,8 @@ use crate::browser::sync::{BrowserSyncOptions, failure, send};
 use crate::browser::watch_later::WatchLaterItem;
 use crate::error::AppError;
 use crate::migrate::journal::{Journal, JournalStatus};
+use crate::migrate::quota::QuotaLedger;
+use crate::youtube::{ApiError, YouTubeApi};
 
 #[derive(Debug, Deserialize)]
 struct ReadPage {
@@ -238,6 +240,114 @@ pub async fn reconcile(
         )
         .await?;
         report.subscriptions_added = added;
+    }
+
+    Ok(report)
+}
+
+/// API로 좋아요·구독 부족분을 채운다.
+///
+/// 브라우저 세션이 응답만 성공으로 돌려주고 목록에 게시하지 않는 경우(플랫폼 스로틀)의
+/// 대체 경로다. 대상 집합은 호출자가 브라우저에서 읽어 전달한다.
+#[allow(clippy::too_many_arguments)]
+pub async fn reconcile_via_api(
+    api: &dyn YouTubeApi,
+    quota: &mut QuotaLedger,
+    source_likes: Option<&[String]>,
+    source_subscriptions: Option<&[String]>,
+    target_likes: &HashSet<String>,
+    target_subscriptions: &HashSet<String>,
+    journal: &mut Journal,
+    limit: Option<usize>,
+    write_cost: u64,
+    now: DateTime<Utc>,
+) -> Result<ReconcileReport, AppError> {
+    let mut report = ReconcileReport::default();
+
+    async fn apply(
+        api: &dyn YouTubeApi,
+        quota: &mut QuotaLedger,
+        ids: &[String],
+        is_like: bool,
+        prefix: &str,
+        journal: &mut Journal,
+        write_cost: u64,
+        now: DateTime<Utc>,
+        report: &mut ReconcileReport,
+    ) -> Result<(), AppError> {
+        for id in ids {
+            quota.reserve(write_cost)?;
+            let result = if is_like {
+                api.like(id).await
+            } else {
+                api.subscribe(id).await
+            };
+            let key = format!("{prefix}{id}");
+            match result {
+                Ok(()) => {
+                    journal.record(&key, JournalStatus::Success, None, now)?;
+                    if is_like {
+                        report.likes_added += 1;
+                    } else {
+                        report.subscriptions_added += 1;
+                    }
+                }
+                Err(ApiError::AlreadyExists(_)) => {
+                    journal.record(
+                        &key,
+                        JournalStatus::Skipped,
+                        Some(Value::String("alreadyPresent".to_string())),
+                        now,
+                    )?;
+                    report.skipped += 1;
+                }
+                Err(ApiError::NotFound(_)) | Err(ApiError::Forbidden(_)) => {
+                    journal.record(
+                        &key,
+                        JournalStatus::Skipped,
+                        Some(Value::String("unavailable".to_string())),
+                        now,
+                    )?;
+                    report.skipped += 1;
+                }
+                Err(error) => return Err(AppError::Api(error)),
+            }
+        }
+        Ok(())
+    }
+
+    if let Some(source) = source_likes {
+        let missing = diff_missing(source, target_likes, limit);
+        report.skipped += (source.len().saturating_sub(missing.len())) as u64;
+        apply(
+            api,
+            quota,
+            &missing,
+            true,
+            "like:",
+            journal,
+            write_cost,
+            now,
+            &mut report,
+        )
+        .await?;
+    }
+
+    if let Some(source) = source_subscriptions {
+        let missing = diff_missing(source, target_subscriptions, limit);
+        report.skipped += (source.len().saturating_sub(missing.len())) as u64;
+        apply(
+            api,
+            quota,
+            &missing,
+            false,
+            "subscription:",
+            journal,
+            write_cost,
+            now,
+            &mut report,
+        )
+        .await?;
     }
 
     Ok(report)

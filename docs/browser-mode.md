@@ -76,6 +76,12 @@ stk browser reconcile --source-port 9223 --target-port 9222 --dry-run
 ```
 
 - `--source-port`를 생략하면 `stk plan --refresh`로 저장한 원본 스냅샷(구독·좋아요)을 쓴다. API 읽기만 필요하고, 원본 브라우저 로그인 없이 동작한다. 스냅샷이 없으면 사용법 오류로 중단한다.
+- `--via api`를 주면 대상 읽기는 브라우저로 하되, 쓰기는 YouTube Data API로 한다. 브라우저가 성공 응답만 돌려주고 목록에 게시하지 않는 경우(플랫폼 스로틀)의 대체 경로다. 쿼터를 쓰므로 `--budget`(기본 9500)과 `--write-cost`가 적용된다.
+
+```bash
+stk browser reconcile --types likes --via api --dry-run
+stk browser reconcile --types likes --via api --budget 9500 --yes
+```
 
 - 좋아요는 `browse(VLLL)`, 구독은 `browse(FEchannels)`로 읽고, 빠진 항목만 `/like/like`·`/subscription/subscribe`로 추가한다.
 - journal 키는 `like:{video_id}`, `subscription:{channel_id}`로 계획 기반 실행과 공유하되, **대상 실측을 우선**한다(이전 성공 기록이 있어도 대상에 없으면 다시 시도).
