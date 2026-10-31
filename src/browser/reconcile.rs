@@ -42,6 +42,9 @@ async fn read_ids(
     cdp.navigate(page::YOUTUBE_URL)
         .await
         .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+    cdp.wait_for_ytcfg()
+        .await
+        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
 
     let mut items: Vec<WatchLaterItem> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
