@@ -93,8 +93,8 @@ stk browser reconcile --types likes --via api --budget 9500 --yes
 API 계획은 대상 채널 하나에 묶여 있어 다른 대상으로 같은 원본을 복제할 때 쓸 수 없다. `browser playlists copy`는 원본 재생목록(계획 스냅샷)과 **대상의 재생목록 제목**만 비교해, 없는 제목만 새로 만들고 항목을 채운다.
 
 ```bash
-stk browser playlists copy --port 9224 --dry-run
-stk browser playlists copy --port 9224 --yes
+stk browser playlists --port 9224 --dry-run
+stk browser playlists --port 9224 --yes
 ```
 
 - 같은 제목이 이미 있으면 내용도 같다고 보고 건너뛴다(원본 계정에서 복제된 목록이므로). 제목이 우연히 같고 내용이 다른 목록은 복제되지 않는다.
