@@ -129,6 +129,16 @@ impl PlaylistCopyReport {
     }
 }
 
+async fn refresh_page(cdp: &mut CdpClient) -> Result<(), AppError> {
+    cdp.navigate(page::YOUTUBE_URL)
+        .await
+        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+    cdp.wait_for_ytcfg()
+        .await
+        .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+    Ok(())
+}
+
 /// 시청기록 재현 결과.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryPlaylistReport {
@@ -222,6 +232,8 @@ pub async fn copy_history_playlist(
         .collect();
     let mut pacing = Jitter::from_clock();
     let mut added: HashSet<&str> = HashSet::new();
+    let mut since_refresh = 0u32;
+
     for (video_id, _) in videos.iter().rev() {
         if present.contains(video_id) || !added.insert(video_id.as_str()) {
             continue;
@@ -230,13 +242,24 @@ pub async fn copy_history_playlist(
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        let response = send(
-            cdp,
-            page::EDIT_PLAYLIST_ENDPOINT,
-            &page::add_item_body(&playlist_id, video_id),
-            opts,
-        )
-        .await?;
+
+        // 수천 건을 한 탭에서 처리하면 페이지가 무거워진다. 주기적으로 새로 열고,
+        // 일시적인 CDP 오류는 한 번 복구를 시도한다.
+        if since_refresh >= 150 {
+            refresh_page(cdp).await?;
+            since_refresh = 0;
+        }
+
+        let body = page::add_item_body(&playlist_id, video_id);
+        let response = match send(cdp, page::EDIT_PLAYLIST_ENDPOINT, &body, opts).await {
+            Ok(response) => response,
+            Err(_) => {
+                refresh_page(cdp).await?;
+                send(cdp, page::EDIT_PLAYLIST_ENDPOINT, &body, opts).await?
+            }
+        };
+        since_refresh += 1;
+
         if response.ok && !response.body.contains("STATUS_FAILED") {
             report.items_added += 1;
         } else if response.body.contains("already") {
