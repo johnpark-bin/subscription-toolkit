@@ -106,6 +106,114 @@ impl PlaylistCopyReport {
     }
 }
 
+/// 시청기록 재현 결과.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HistoryPlaylistReport {
+    /// 새로 만든 재생목록 ID.
+    pub created: Option<String>,
+    /// 이미 있어 재사용한 재생목록 ID.
+    pub reused: Option<String>,
+    /// 추가한 항목 수.
+    pub items_added: u64,
+    /// 상한으로 잘라낸 항목 수.
+    pub truncated: usize,
+}
+
+impl HistoryPlaylistReport {
+    /// 사람이 읽는 요약.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        if let Some(id) = &self.created {
+            out.push_str(&format!("시청기록 플레이리스트를 만들었습니다: {id}\n"));
+        }
+        if let Some(id) = &self.reused {
+            out.push_str(&format!("같은 이름의 재생목록을 재사용합니다: {id}\n"));
+        }
+        out.push_str(&format!("항목 추가: {}건", self.items_added));
+        if self.truncated > 0 {
+            out.push_str(&format!(" · 잘림 {}", self.truncated));
+        }
+        out.push('\n');
+        out
+    }
+}
+
+/// 시청기록을 비공개 재생목록으로 재현한다.
+///
+/// `videos`는 최신순이다. 재생목록은 나중에 추가한 항목이 위로 오므로, 최신 항목이
+/// 먼저 보이도록 오래된 항목부터 추가한다. 같은 이름의 재생목록이 있으면 재사용한다.
+pub async fn copy_history_playlist(
+    cdp: &mut CdpClient,
+    videos: &[(String, String)],
+    name: &str,
+    description: &str,
+    opts: &BrowserSyncOptions,
+) -> Result<HistoryPlaylistReport, AppError> {
+    let target = read_target_playlists(cdp, 50).await?;
+    if let Some(existing) = target.iter().find(|item| item.title == name) {
+        return Ok(HistoryPlaylistReport {
+            reused: Some(existing.video_id.clone()),
+            ..HistoryPlaylistReport::default()
+        });
+    }
+
+    let response = send(
+        cdp,
+        page::CREATE_PLAYLIST_ENDPOINT,
+        &page::create_playlist_body(name, description, "private"),
+        opts,
+    )
+    .await?;
+    if !response.ok {
+        return Err(failure(&format!("history:{name}"), &response));
+    }
+    let playlist_id = response
+        .json()
+        .and_then(|value| {
+            value["playlistId"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| value["playlistId"].as_u64().map(|id| id.to_string()))
+        })
+        .ok_or_else(|| {
+            AppError::Config(format!(
+                "시청기록 재생목록 생성 응답에 playlistId가 없습니다: {}",
+                response.body
+            ))
+        })?;
+
+    let mut report = HistoryPlaylistReport {
+        created: Some(playlist_id.clone()),
+        ..HistoryPlaylistReport::default()
+    };
+    let mut pacing = Jitter::from_clock();
+    let mut added: HashSet<&str> = HashSet::new();
+    for (video_id, _) in videos.iter().rev() {
+        if !added.insert(video_id.as_str()) {
+            continue;
+        }
+        let delay = opts.delay + pacing.duration(opts.jitter);
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        let response = send(
+            cdp,
+            page::EDIT_PLAYLIST_ENDPOINT,
+            &page::add_item_body(&playlist_id, video_id),
+            opts,
+        )
+        .await?;
+        if response.ok && !response.body.contains("STATUS_FAILED") {
+            report.items_added += 1;
+        } else if response.body.contains("already") {
+            continue;
+        } else {
+            return Err(failure(&format!("history:{video_id}"), &response));
+        }
+    }
+    Ok(report)
+}
+
 /// 원본 재생목록 중 대상에 없는 제목만 생성하고 항목을 채운다.
 pub async fn copy_missing_playlists(
     cdp: &mut CdpClient,

@@ -13,7 +13,10 @@ pub mod sync;
 pub mod watch_later;
 
 pub use cdp::{CdpClient, CdpError, PageResponse};
-pub use playlists::{PlaylistCopyReport, copy_missing_playlists, read_target_playlists};
+pub use playlists::{
+    HistoryPlaylistReport, PlaylistCopyReport, copy_history_playlist, copy_missing_playlists,
+    read_target_playlists,
+};
 pub use reconcile::{
     ReconcileReport, diff_missing, read_liked_videos, read_subscriptions, reconcile,
     reconcile_via_api,

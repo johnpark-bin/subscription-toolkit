@@ -101,6 +101,22 @@ stk browser playlists --port 9224 --yes
 - 항목은 원본 순서대로 추가하고, 중복 videoId는 한 번만 넣는다.
 - journal을 쓰지 않고 대상 제목을 기준으로 판단하므로 다른 대상 채널에도 반복 실행할 수 있다(재실행 시 새로 만든 제목은 건너뜀).
 
+## 시청기록 재현
+
+시청기록 자체는 API·브라우저 어느 쪽으로도 계정에 쓸 수 없다. Takeout으로 가져온 기록을 **비공개 재생목록**으로 재현하는 것이 유일한 방법이다. API 경로(`stk history playlist`)는 항목당 50 units를 쓰므로, CDP 경로를 따로 제공한다.
+
+```bash
+stk history import --takeout takeout/takeout-XXXX.zip
+stk history report --top 10
+stk browser history --port 9222 --dry-run
+stk browser history --port 9222 --yes
+```
+
+- 최신순·중복 제거·5,000개 상한(`--limit`으로 축소)은 `history_video_ids` 규칙을 그대로 쓴다.
+- 재생목록은 나중에 추가한 항목이 위로 오므로 **오래된 항목부터** 넣어 최신순 표시를 맞춘다.
+- 같은 이름의 재생목록이 있으면 재사용하고 아무 것도 추가하지 않는다(이름 기준).
+- 설명은 `Google Takeout 시청기록에서 생성`, 공개 범위는 비공개다.
+
 ## Watch Later(나중에 볼 동영상)
 
 API와 Takeout에서 빠지는 항목이라 브라우저 세션으로만 동기화한다. 검증된 동작:
