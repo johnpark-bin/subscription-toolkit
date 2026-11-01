@@ -356,6 +356,12 @@ const COLLECT_PLAYLISTS_JS: &str = r#"
     walk(parsed);
 "#;
 
+/// 재생목록 하나의 영상 목록(`VL<id>`)을 읽는 스크립트.
+pub fn playlist_videos_read_js(playlist_id: &str, continuation: Option<&str>) -> String {
+    let browse_id = format!("VL{playlist_id}");
+    browse_reader_js(&browse_id, continuation, COLLECT_IDS_JS)
+}
+
 /// 소유 재생목록(FEplaylist_aggregation) 목록을 읽는 스크립트.
 pub fn playlists_read_js(continuation: Option<&str>) -> String {
     browse_reader_js("FEplaylist_aggregation", continuation, COLLECT_PLAYLISTS_JS)

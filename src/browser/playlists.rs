@@ -30,11 +30,14 @@ struct ReadPage {
     error: String,
 }
 
-/// 대상 계정의 재생목록(제목·ID)을 읽는다.
-pub async fn read_target_playlists(
+async fn read_with<F>(
     cdp: &mut CdpClient,
     max_pages: usize,
-) -> Result<Vec<WatchLaterItem>, AppError> {
+    script: F,
+) -> Result<Vec<WatchLaterItem>, AppError>
+where
+    F: Fn(Option<&str>) -> String,
+{
     cdp.navigate(page::YOUTUBE_URL)
         .await
         .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
@@ -47,7 +50,7 @@ pub async fn read_target_playlists(
     let mut continuation: Option<String> = None;
 
     for _ in 0..max_pages.max(1) {
-        let expression = page::playlists_read_js(continuation.as_deref());
+        let expression = script(continuation.as_deref());
         let value = cdp
             .evaluate(&expression)
             .await
@@ -77,6 +80,26 @@ pub async fn read_target_playlists(
         }
     }
     Ok(items)
+}
+
+/// 대상 계정의 재생목록(제목·ID)을 읽는다.
+pub async fn read_target_playlists(
+    cdp: &mut CdpClient,
+    max_pages: usize,
+) -> Result<Vec<WatchLaterItem>, AppError> {
+    read_with(cdp, max_pages, page::playlists_read_js).await
+}
+
+/// 재생목록 하나의 영상 ID를 읽는다.
+pub async fn read_playlist_videos(
+    cdp: &mut CdpClient,
+    playlist_id: &str,
+    max_pages: usize,
+) -> Result<Vec<String>, AppError> {
+    let script =
+        move |continuation: Option<&str>| page::playlist_videos_read_js(playlist_id, continuation);
+    let items = read_with(cdp, max_pages, script).await?;
+    Ok(items.into_iter().map(|item| item.video_id).collect())
 }
 
 /// 실행 결과.
@@ -150,46 +173,57 @@ pub async fn copy_history_playlist(
     opts: &BrowserSyncOptions,
 ) -> Result<HistoryPlaylistReport, AppError> {
     let target = read_target_playlists(cdp, 50).await?;
-    if let Some(existing) = target.iter().find(|item| item.title == name) {
-        return Ok(HistoryPlaylistReport {
-            reused: Some(existing.video_id.clone()),
-            ..HistoryPlaylistReport::default()
-        });
-    }
-
-    let response = send(
-        cdp,
-        page::CREATE_PLAYLIST_ENDPOINT,
-        &page::create_playlist_body(name, description, "private"),
-        opts,
-    )
-    .await?;
-    if !response.ok {
-        return Err(failure(&format!("history:{name}"), &response));
-    }
-    let playlist_id = response
-        .json()
-        .and_then(|value| {
-            value["playlistId"]
-                .as_str()
-                .map(str::to_string)
-                .or_else(|| value["playlistId"].as_u64().map(|id| id.to_string()))
-        })
-        .ok_or_else(|| {
-            AppError::Config(format!(
-                "시청기록 재생목록 생성 응답에 playlistId가 없습니다: {}",
-                response.body
-            ))
-        })?;
-
-    let mut report = HistoryPlaylistReport {
-        created: Some(playlist_id.clone()),
-        ..HistoryPlaylistReport::default()
+    let existing = target.iter().find(|item| item.title == name);
+    let (playlist_id, mut report) = if let Some(existing) = existing {
+        (
+            existing.video_id.clone(),
+            HistoryPlaylistReport {
+                reused: Some(existing.video_id.clone()),
+                ..HistoryPlaylistReport::default()
+            },
+        )
+    } else {
+        let response = send(
+            cdp,
+            page::CREATE_PLAYLIST_ENDPOINT,
+            &page::create_playlist_body(name, description, "private"),
+            opts,
+        )
+        .await?;
+        if !response.ok {
+            return Err(failure(&format!("history:{name}"), &response));
+        }
+        let playlist_id = response
+            .json()
+            .and_then(|value| {
+                value["playlistId"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| value["playlistId"].as_u64().map(|id| id.to_string()))
+            })
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "시청기록 재생목록 생성 응답에 playlistId가 없습니다: {}",
+                    response.body
+                ))
+            })?;
+        (
+            playlist_id.clone(),
+            HistoryPlaylistReport {
+                created: Some(playlist_id),
+                ..HistoryPlaylistReport::default()
+            },
+        )
     };
+
+    let present: HashSet<String> = read_playlist_videos(cdp, &playlist_id, 100)
+        .await?
+        .into_iter()
+        .collect();
     let mut pacing = Jitter::from_clock();
     let mut added: HashSet<&str> = HashSet::new();
     for (video_id, _) in videos.iter().rev() {
-        if !added.insert(video_id.as_str()) {
+        if present.contains(video_id) || !added.insert(video_id.as_str()) {
             continue;
         }
         let delay = opts.delay + pacing.duration(opts.jitter);

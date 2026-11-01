@@ -821,6 +821,8 @@ async fn history_playlist_is_created_with_newest_first_order() {
         // 대상 재생목록 없음
         json!({"ok": true, "status": 200, "items": [], "continuation": null}),
         json!({"ok": true, "status": 200, "body": "{\"playlistId\":\"PL_HIST\"}"}),
+        // 새로 만든 재생목록의 항목(비어 있음)
+        json!({"ok": true, "status": 200, "items": [], "continuation": null}),
         json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
         json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
     ])
@@ -847,18 +849,22 @@ async fn history_playlist_is_created_with_newest_first_order() {
     assert_eq!(report.items_added, 2);
     let expressions = fake.expressions.lock().expect("잠금").clone();
     // 최신 항목이 위로 오도록 오래된 항목부터 추가한다.
-    assert!(expressions[2].contains(r#""addedVideoId":"OLD""#));
-    assert!(expressions[3].contains(r#""addedVideoId":"NEW""#));
+    assert!(expressions[3].contains(r#""addedVideoId":"OLD""#));
+    assert!(expressions[4].contains(r#""addedVideoId":"NEW""#));
 }
 
 #[tokio::test]
 async fn history_playlist_reuses_same_name() {
-    let fake = start_fake(vec![json!({
-        "ok": true,
-        "status": 200,
-        "items": [{"video_id": "PL_EXIST", "title": "시청기록 (이전)"}],
-        "continuation": null
-    })])
+    let fake = start_fake(vec![
+        json!({
+            "ok": true,
+            "status": 200,
+            "items": [{"video_id": "PL_EXIST", "title": "시청기록 (이전)"}],
+            "continuation": null
+        }),
+        // 재사용할 재생목록에 이미 NEW가 들어 있음
+        json!({"ok": true, "status": 200, "items": [{"video_id": "NEW", "title": "새 영상"}], "continuation": null}),
+    ])
     .await;
     let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
         .await

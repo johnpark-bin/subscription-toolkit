@@ -138,6 +138,26 @@ fn history_import_finds_nested_file() {
 }
 
 #[test]
+fn history_import_html_only_takeout() {
+    let (dir, paths) = setup();
+    let history_dir = dir.path().join("Takeout/YouTube/history");
+    std::fs::create_dir_all(&history_dir).expect("디렉터리");
+    std::fs::copy(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/takeout/watch-history.html"
+        ),
+        history_dir.join("watch-history.html"),
+    )
+    .expect("복사");
+
+    let file = import(&paths, dir.path(), Utc::now()).expect("HTML import 실패");
+    assert_eq!(file.entries.len(), 4);
+    assert_eq!(file.entries[0].video_id.as_deref(), Some("aaaaaaaaaaa"));
+    assert!(paths.history().exists());
+}
+
+#[test]
 fn history_import_zip() {
     let (dir, paths) = setup();
     let zip_path = dir.path().join("takeout.zip");
