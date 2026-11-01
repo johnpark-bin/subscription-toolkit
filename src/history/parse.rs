@@ -139,6 +139,16 @@ fn single_candidate(
     }
 }
 
+/// kids/ 아래 항목을 제외해 본계정 기록을 우선한다.
+fn prefer_main_account(names: Vec<String>) -> Vec<String> {
+    let main: Vec<String> = names
+        .iter()
+        .filter(|name| !name.contains("/kids/"))
+        .cloned()
+        .collect();
+    if main.is_empty() { names } else { main }
+}
+
 /// 후보 중 하나를 고른다. JSON이 있으면 JSON을 우선한다.
 fn pick_candidate(names: Vec<String>, root: &Path) -> Result<(String, HistoryFormat), AppError> {
     let json: Vec<String> = names
@@ -154,7 +164,7 @@ fn pick_candidate(names: Vec<String>, root: &Path) -> Result<(String, HistoryFor
         .cloned()
         .collect();
     if !json.is_empty() {
-        let chosen = single_candidate(json, root, "watch-history.json")?;
+        let chosen = single_candidate(prefer_main_account(json), root, "watch-history.json")?;
         return Ok((chosen, HistoryFormat::Json));
     }
     let html: Vec<String> = names
@@ -169,7 +179,7 @@ fn pick_candidate(names: Vec<String>, root: &Path) -> Result<(String, HistoryFor
         })
         .cloned()
         .collect();
-    let chosen = single_candidate(html, root, "watch-history.html")?;
+    let chosen = single_candidate(prefer_main_account(html), root, "watch-history.html")?;
     Ok((chosen, HistoryFormat::Html))
 }
 
@@ -658,6 +668,17 @@ mod tests {
         assert_eq!(entries[2].video_id, None, "삭제된 영상");
         assert_eq!(entries[3].header, "YouTube Music");
         assert_eq!(entries[3].title, "영상 & 노래 E", "HTML 엔티티 복원");
+    }
+
+    #[test]
+    fn pick_candidate_prefers_main_account_over_kids() {
+        let names = vec![
+            "Takeout/YouTube and YouTube Music/kids/모건/watch-history.html".to_string(),
+            "Takeout/YouTube and YouTube Music/history/watch-history.html".to_string(),
+        ];
+        let (chosen, format) = pick_candidate(names, Path::new("Takeout")).expect("선택 실패");
+        assert!(chosen.contains("/history/"));
+        assert_eq!(format, HistoryFormat::Html);
     }
 
     #[test]
