@@ -13,7 +13,9 @@ use serde_json::Value;
 use crate::account::Account;
 use crate::auth::{self, FileTokenStore, LoginOptions, LoginOutcome};
 use crate::browser::cdp::CdpClient;
-use crate::browser::playlists::{copy_missing_playlists, read_target_playlists};
+use crate::browser::playlists::{
+    copy_history_playlist, copy_missing_playlists, read_target_playlists,
+};
 use crate::browser::reconcile::{
     diff_missing, read_liked_videos, read_subscriptions, reconcile, reconcile_via_api,
 };
@@ -295,6 +297,34 @@ pub enum BrowserCommand {
         /// 대상 계정 Chrome DevTools 포트.
         #[arg(long, default_value_t = 9222)]
         port: u16,
+        /// 액션 사이 최소 대기(ms).
+        #[arg(long, default_value_t = 3_000)]
+        delay_ms: u64,
+        /// 최소 대기에 더할 무작위 폭(ms).
+        #[arg(long, default_value_t = 1_500)]
+        jitter_ms: u64,
+        /// 실제 쓰기 없이 예정만 출력합니다.
+        #[arg(long)]
+        dry_run: bool,
+        /// 확인 없이 실행합니다.
+        #[arg(long)]
+        yes: bool,
+        /// 브라우저 채널 확인을 생략합니다(권장하지 않음).
+        #[arg(long)]
+        skip_account_check: bool,
+    },
+    /// Takeout 시청기록을 대상 계정의 비공개 재생목록으로 재현합니다(CDP).
+    #[command(help_template = "{about-with-newline}\n사용법: {usage}\n\n옵션:\n{options}")]
+    History {
+        /// 대상 계정 Chrome DevTools 포트.
+        #[arg(long, default_value_t = 9222)]
+        port: u16,
+        /// 재생목록 이름.
+        #[arg(long, default_value = history::DEFAULT_PLAYLIST_NAME)]
+        name: String,
+        /// 최대 항목 수.
+        #[arg(long)]
+        limit: Option<usize>,
         /// 액션 사이 최소 대기(ms).
         #[arg(long, default_value_t = 3_000)]
         delay_ms: u64,
@@ -1461,6 +1491,86 @@ async fn browser_command(
                 copy_missing_playlists(&mut cdp, &plan.source.playlists, &opts, now).await?;
             cdp.close().await;
             print!("{}", report.render());
+            Ok(0)
+        }
+        BrowserCommand::History {
+            port,
+            name,
+            limit,
+            delay_ms,
+            jitter_ms,
+            dry_run,
+            yes,
+            skip_account_check,
+        } => {
+            let now = Utc::now();
+            let file = history::load(paths)?;
+            let (videos, truncated) = history::history_video_ids(&file, limit);
+            if videos.is_empty() {
+                return Err(AppError::Config(
+                    "재현할 시청기록이 없습니다. `stk history import --takeout <경로>` 결과를 확인하세요."
+                        .to_string(),
+                ));
+            }
+            let opts = BrowserSyncOptions {
+                delay: Duration::from_millis(delay_ms),
+                jitter: Duration::from_millis(jitter_ms),
+                retry_base: Duration::from_secs(5),
+                limit: None,
+            };
+            let mut cdp = CdpClient::attach(port)
+                .await
+                .map_err(|error| AppError::Config(format!("{error} — {}", error.hint())))?;
+            if !skip_account_check {
+                let expected = load_plan(paths, now)?
+                    .map(|plan| plan.target.channel.id)
+                    .unwrap_or_default();
+                verify_account(&mut cdp, &expected).await?;
+            }
+
+            if dry_run {
+                let target = read_target_playlists(&mut cdp, 50).await?;
+                let exists = target.iter().find(|item| item.title == name);
+                cdp.close().await;
+                println!(
+                    "시청기록 재현 예정: 항목 {}건{}
+대상 재생목록 '{}': {}",
+                    videos.len(),
+                    if truncated > 0 {
+                        format!(" (잘림 {truncated})")
+                    } else {
+                        String::new()
+                    },
+                    name,
+                    exists
+                        .map(|item| format!("이미 있음 ({})", item.video_id))
+                        .unwrap_or_else(|| "없음(새로 생성)".to_string())
+                );
+                return Ok(0);
+            }
+
+            let prompt = format!(
+                "시청기록 {}건을 비공개 재생목록 '{name}'으로 재현합니다. 대상 계정에 새 재생목록이 생깁니다.",
+                videos.len()
+            );
+            if !confirm(&prompt, yes)? {
+                cdp.close().await;
+                eprintln!("취소했습니다.");
+                return Ok(0);
+            }
+            let report = copy_history_playlist(
+                &mut cdp,
+                &videos,
+                &name,
+                history::HISTORY_DESCRIPTION,
+                &opts,
+            )
+            .await?;
+            cdp.close().await;
+            print!("{}", report.render());
+            if truncated > 0 {
+                eprintln!("5,000/--limit 상한으로 {truncated}건을 잘라냈습니다.");
+            }
             Ok(0)
         }
         BrowserCommand::WatchLater { command } => watch_later_command(paths, command).await,

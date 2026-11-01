@@ -814,3 +814,72 @@ async fn playlist_copy_skips_existing_titles_and_creates_missing() {
     assert!(expressions[2].contains(r#""addedVideoId":"VID_2""#));
     assert!(expressions[3].contains(r#""addedVideoId":"VID_3""#));
 }
+
+#[tokio::test]
+async fn history_playlist_is_created_with_newest_first_order() {
+    let fake = start_fake(vec![
+        // 대상 재생목록 없음
+        json!({"ok": true, "status": 200, "items": [], "continuation": null}),
+        json!({"ok": true, "status": 200, "body": "{\"playlistId\":\"PL_HIST\"}"}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+        json!({"ok": true, "status": 200, "body": "{\"status\":\"STATUS_SUCCEEDED\"}"}),
+    ])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+    let videos = vec![
+        ("NEW".to_string(), "새 영상".to_string()),
+        ("OLD".to_string(), "옛 영상".to_string()),
+    ];
+
+    let report = subscription_toolkit::browser::copy_history_playlist(
+        &mut cdp,
+        &videos,
+        "시청기록 (이전)",
+        "Google Takeout 시청기록에서 생성",
+        &fast_options(),
+    )
+    .await
+    .expect("시청기록 재현 실패");
+
+    assert_eq!(report.created.as_deref(), Some("PL_HIST"));
+    assert_eq!(report.items_added, 2);
+    let expressions = fake.expressions.lock().expect("잠금").clone();
+    // 최신 항목이 위로 오도록 오래된 항목부터 추가한다.
+    assert!(expressions[2].contains(r#""addedVideoId":"OLD""#));
+    assert!(expressions[3].contains(r#""addedVideoId":"NEW""#));
+}
+
+#[tokio::test]
+async fn history_playlist_reuses_same_name() {
+    let fake = start_fake(vec![json!({
+        "ok": true,
+        "status": 200,
+        "items": [{"video_id": "PL_EXIST", "title": "시청기록 (이전)"}],
+        "continuation": null
+    })])
+    .await;
+    let mut cdp = subscription_toolkit::browser::CdpClient::connect(&fake.url)
+        .await
+        .expect("CDP 연결 실패");
+
+    let report = subscription_toolkit::browser::copy_history_playlist(
+        &mut cdp,
+        &[("NEW".to_string(), "새 영상".to_string())],
+        "시청기록 (이전)",
+        "설명",
+        &fast_options(),
+    )
+    .await
+    .expect("재사용 실패");
+
+    assert_eq!(report.reused.as_deref(), Some("PL_EXIST"));
+    assert_eq!(report.created, None);
+    assert_eq!(report.items_added, 0);
+    assert_eq!(
+        fake.expressions.lock().expect("잠금").len(),
+        1,
+        "읽기만 한다"
+    );
+}

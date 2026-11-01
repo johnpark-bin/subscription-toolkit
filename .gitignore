@@ -5,3 +5,4 @@
 client_secret*.json
 tokens/
 data/
+takeout/

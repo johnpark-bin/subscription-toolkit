@@ -40,6 +40,7 @@ stk browser check --port 9222
 stk browser sync <subscriptions|playlists|likes|all> --port 9222 [--limit N] [--delay-ms 3000] [--jitter-ms 1500] [--dry-run] [--yes]
 stk browser reconcile [--source-port 9223] [--target-port 9222] [--types likes,subscriptions] [--via cdp|api] [--budget N] [--dry-run] [--yes]
 stk browser playlists --port 9222 [--dry-run] [--yes]
+stk browser history --port 9222 [--name "시청기록 (이전)"] [--limit N] [--dry-run] [--yes]
 stk browser watch-later export --port 9223 [--expect-channel <id>] [--out <path>]
 stk browser watch-later sync --port 9222 [--limit N] [--prune] [--dry-run] [--yes]
 

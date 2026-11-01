@@ -79,6 +79,7 @@ stk push likes --yes --budget 9500
 
 ```bash
 stk history import --takeout <디렉터리_또는_zip_경로>
+stk browser history --port 9222 --yes      # CDP로 비공개 재생목록 재현(쿼터 0)
 stk history report --top 20
 stk history playlist --dry-run
 stk history playlist --yes --budget 9500
