@@ -131,13 +131,14 @@ impl PlaylistCopyReport {
 
 /// 재생목록 최대 크기 오류인지 확인한다.
 pub fn is_playlist_full(body: &str) -> bool {
+    let lower = body.to_lowercase();
     [
         "최대 재생목록 크기를 초과",
         "maximum playlist size",
-        "FAILED_PRECONDITION",
+        "failed_precondition",
     ]
     .iter()
-    .any(|marker| body.contains(marker))
+    .any(|marker| lower.contains(marker))
 }
 
 async fn refresh_page(cdp: &mut CdpClient) -> Result<(), AppError> {
