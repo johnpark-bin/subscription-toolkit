@@ -885,7 +885,7 @@ async fn history_playlist_reuses_same_name() {
     assert_eq!(report.items_added, 0);
     assert_eq!(
         fake.expressions.lock().expect("잠금").len(),
-        1,
-        "읽기만 한다"
+        2,
+        "재생목록 목록과 항목만 읽고 쓰지는 않는다"
     );
 }
