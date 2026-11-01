@@ -36,6 +36,15 @@ pub struct HistoryEntry {
     pub is_ad: bool,
 }
 
+/// Takeout 파일 형식.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryFormat {
+    /// `watch-history.json`(권장).
+    Json,
+    /// `watch-history.html`(JSON을 선택하지 않은 내보내기).
+    Html,
+}
+
 /// 정규화한 시청기록 파일.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HistoryFile {
@@ -69,10 +78,25 @@ struct RawDetail {
     name: Option<String>,
 }
 
-fn is_history_filename(path: &Path) -> bool {
+fn format_of_name(name: &str) -> Option<HistoryFormat> {
+    let lower = name.to_ascii_lowercase();
+    if lower == "watch-history.json" {
+        Some(HistoryFormat::Json)
+    } else if lower == "watch-history.html" {
+        Some(HistoryFormat::Html)
+    } else {
+        None
+    }
+}
+
+fn format_of_path(path: &Path) -> Option<HistoryFormat> {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("watch-history.json"))
+        .and_then(format_of_name)
+}
+
+fn is_history_filename(path: &Path) -> bool {
+    format_of_path(path).is_some()
 }
 
 fn collect_candidates(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -113,6 +137,40 @@ fn single_candidate(
             candidates.join("\n")
         ))),
     }
+}
+
+/// 후보 중 하나를 고른다. JSON이 있으면 JSON을 우선한다.
+fn pick_candidate(names: Vec<String>, root: &Path) -> Result<(String, HistoryFormat), AppError> {
+    let json: Vec<String> = names
+        .iter()
+        .filter(|name| {
+            format_of_name(
+                Path::new(name)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(""),
+            ) == Some(HistoryFormat::Json)
+        })
+        .cloned()
+        .collect();
+    if !json.is_empty() {
+        let chosen = single_candidate(json, root, "watch-history.json")?;
+        return Ok((chosen, HistoryFormat::Json));
+    }
+    let html: Vec<String> = names
+        .iter()
+        .filter(|name| {
+            format_of_name(
+                Path::new(name)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(""),
+            ) == Some(HistoryFormat::Html)
+        })
+        .cloned()
+        .collect();
+    let chosen = single_candidate(html, root, "watch-history.html")?;
+    Ok((chosen, HistoryFormat::Html))
 }
 
 fn read_zip_entry(zip_path: &Path, entry_name: &str) -> Result<String, AppError> {
@@ -174,7 +232,7 @@ fn read_plain_file(path: &Path) -> Result<String, AppError> {
 /// Takeout 디렉터리·zip·단일 파일에서 `watch-history.json` 원문을 읽는다.
 ///
 /// 후보가 없거나 여러 개면 오류다.
-pub fn read_history_source(root: &Path) -> Result<(String, String), AppError> {
+pub fn read_history_source(root: &Path) -> Result<(String, String, HistoryFormat), AppError> {
     if !root.exists() {
         return Err(AppError::Config(format!(
             "Takeout 경로를 찾을 수 없습니다: {}",
@@ -189,32 +247,31 @@ pub fn read_history_source(root: &Path) -> Result<(String, String), AppError> {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
         {
             let names = zip_entry_names(root)?;
-            let entry = single_candidate(names, root, "watch-history.json")?;
+            let (entry, format) = pick_candidate(names, root)?;
             let raw = read_zip_entry(root, &entry)?;
-            return Ok((format!("{}!{entry}", root.display()), raw));
+            return Ok((format!("{}!{entry}", root.display()), raw, format));
         }
-        if !is_history_filename(root) {
+        let Some(format) = format_of_path(root) else {
             return Err(AppError::Config(format!(
-                "watch-history.json 파일을 지정해야 합니다: {}",
+                "watch-history.json 또는 watch-history.html 파일을 지정해야 합니다: {}",
                 root.display()
             )));
-        }
+        };
         let raw = read_plain_file(root)?;
-        return Ok((root.display().to_string(), raw));
+        return Ok((root.display().to_string(), raw, format));
     }
 
     let mut candidates = Vec::new();
     collect_candidates(root, 0, &mut candidates);
-    let chosen = single_candidate(
+    let (chosen, format) = pick_candidate(
         candidates
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
         root,
-        "watch-history.json",
     )?;
     let raw = read_plain_file(Path::new(&chosen))?;
-    Ok((chosen, raw))
+    Ok((chosen, raw, format))
 }
 
 fn zip_entry_names(zip_path: &Path) -> Result<Vec<String>, AppError> {
@@ -236,7 +293,8 @@ fn zip_entry_names(zip_path: &Path) -> Result<Vec<String>, AppError> {
             Path::new(name)
                 .file_name()
                 .and_then(|file| file.to_str())
-                .is_some_and(|file| file.eq_ignore_ascii_case("watch-history.json"))
+                .and_then(format_of_name)
+                .is_some()
         })
         .map(str::to_string)
         .collect())
@@ -334,10 +392,177 @@ pub fn parse_history(raw: &str) -> Result<Vec<HistoryEntry>, AppError> {
     Ok(entries.into_iter().map(normalize).collect())
 }
 
+fn decode_entities(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&emsp;", " ")
+}
+
+fn parse_month(name: &str) -> Option<u32> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    MONTHS
+        .iter()
+        .position(|month| month.eq_ignore_ascii_case(name))
+        .map(|index| index as u32 + 1)
+}
+
+fn zone_offset_hours(zone: &str) -> i64 {
+    match zone {
+        "KST" => 9,
+        "JST" => 9,
+        "UTC" | "GMT" => 0,
+        "PST" => -8,
+        "PDT" => -7,
+        "EST" => -5,
+        "EDT" => -4,
+        _ => 0,
+    }
+}
+
+/// `Oct 30, 2026, 10:02:29 PM KST` 형식의 시각을 UTC로 바꾼다.
+pub fn parse_html_time(raw: &str) -> Option<DateTime<Utc>> {
+    let mut parts = raw.split_whitespace();
+    let month = parse_month(parts.next()?)?;
+    let day: u32 = parts.next()?.trim_end_matches(',').parse().ok()?;
+    let year: i32 = parts.next()?.trim_end_matches(',').parse().ok()?;
+    let clock = parts.next()?;
+    let meridiem = parts.next()?;
+    let zone = parts.next().unwrap_or("UTC");
+    let mut clock_parts = clock.split(':');
+    let mut hour: u32 = clock_parts.next()?.parse().ok()?;
+    let minute: u32 = clock_parts.next()?.parse().ok()?;
+    let second: u32 = clock_parts.next().unwrap_or("0").parse().ok()?;
+    if meridiem.eq_ignore_ascii_case("PM") && hour < 12 {
+        hour += 12;
+    }
+    if meridiem.eq_ignore_ascii_case("AM") && hour == 12 {
+        hour = 0;
+    }
+    let naive =
+        chrono::NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(hour, minute, second)?;
+    let offset = chrono::FixedOffset::east_opt((zone_offset_hours(zone) * 3600) as i32)?;
+    Some(
+        naive
+            .and_local_timezone(offset)
+            .single()?
+            .with_timezone(&Utc),
+    )
+}
+
+/// HTML 조각에서 `(href, 텍스트)` 앵커 목록을 뽑는다.
+fn html_anchors(content: &str) -> Vec<(String, String)> {
+    let mut anchors = Vec::new();
+    let mut offset = 0usize;
+    while let Some(found) = content[offset..].find("<a href=\"") {
+        let href_start = offset + found + "<a href=\"".len();
+        let Some(quote) = content[href_start..].find('"') else {
+            break;
+        };
+        let href_end = href_start + quote;
+        let href = content[href_start..href_end].to_string();
+        let Some(gt) = content[href_end..].find('>') else {
+            break;
+        };
+        let text_start = href_end + gt + 1;
+        let Some(close) = content[text_start..].find("</a>") else {
+            break;
+        };
+        let text = decode_entities(&content[text_start..text_start + close])
+            .trim()
+            .to_string();
+        anchors.push((href, text));
+        offset = text_start + close + "</a>".len();
+    }
+    anchors
+}
+
+/// `watch-history.html` 원문을 정규화한다.
+///
+/// JSON을 선택하지 않고 내보낸 Takeout을 지원하기 위한 경로다. 항목마다 제목 링크,
+/// 채널 링크, 시각을 추출하고 광고·삭제 항목을 구분한다.
+pub fn parse_history_html(raw: &str) -> Vec<HistoryEntry> {
+    let mut entries = Vec::new();
+    for chunk in raw.split("<div class=\"outer-cell").skip(1) {
+        let header = chunk
+            .split("mdl-typography--title\">")
+            .nth(1)
+            .and_then(|rest| rest.split('<').next())
+            .map(|text| decode_entities(text).trim().to_string())
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| "YouTube".to_string());
+
+        let content = chunk
+            .split("mdl-typography--body-1\">")
+            .nth(1)
+            .and_then(|rest| rest.split("</div>").next())
+            .unwrap_or_default();
+        let anchors = html_anchors(content);
+
+        let video_anchor = anchors.iter().find_map(|(href, text)| {
+            let id = href
+                .split("watch?v=")
+                .nth(1)
+                .and_then(|rest| rest.split(['&', '"']).next())?;
+            is_video_id(id).then(|| (id.to_string(), text.clone()))
+        });
+        let channel_anchor = anchors
+            .iter()
+            .find(|(href, _)| href.contains("/channel/") || href.contains("/@"));
+
+        let (video_id, title) = match &video_anchor {
+            Some((id, text)) => (Some(id.clone()), text.clone()),
+            None => (
+                None,
+                decode_entities(content.split("<br>").next().unwrap_or_default())
+                    .trim()
+                    .trim_start_matches("Watched ")
+                    .trim_start_matches("Viewed ")
+                    .to_string(),
+            ),
+        };
+        let (channel_id, channel_name) = match channel_anchor {
+            Some((href, name)) => (
+                extract_channel_id(href),
+                (!name.is_empty()).then(|| name.clone()),
+            ),
+            None => (None, None),
+        };
+
+        let time_text = content.split("<br>").map(|part| part.trim()).find(|part| {
+            part.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                && part.contains(',')
+                && part.contains("20")
+        });
+        let watched_at = time_text.and_then(parse_html_time);
+
+        let is_ad = chunk.contains("From Google Ads");
+        entries.push(HistoryEntry {
+            video_id,
+            title,
+            channel_name,
+            channel_id,
+            watched_at,
+            header,
+            is_ad,
+        });
+    }
+    entries
+}
+
 /// Takeout에서 시청기록을 읽어 `<home>/data/history.json`에 저장한다.
 pub fn import(paths: &Paths, root: &Path, now: DateTime<Utc>) -> Result<HistoryFile, AppError> {
-    let (source_file, raw) = read_history_source(root)?;
-    let entries = parse_history(&raw)?;
+    let (source_file, raw, format) = read_history_source(root)?;
+    let entries = match format {
+        HistoryFormat::Json => parse_history(&raw)?,
+        HistoryFormat::Html => parse_history_html(&raw),
+    };
     let file = HistoryFile {
         imported_at: now,
         source_file,
@@ -400,6 +625,60 @@ mod tests {
             extract_video_id("https://www.youtube.com/watch?v=too-short"),
             None
         );
+    }
+
+    #[test]
+    fn parse_html_extracts_entries() {
+        let raw = include_str!("../../tests/fixtures/takeout/watch-history.html");
+        let entries = parse_history_html(raw);
+        assert_eq!(entries.len(), 4);
+
+        let first = &entries[0];
+        assert_eq!(first.video_id.as_deref(), Some("aaaaaaaaaaa"));
+        assert_eq!(first.title, "영상 A");
+        assert_eq!(first.channel_name.as_deref(), Some("Channel A"));
+        assert!(
+            first
+                .channel_id
+                .as_deref()
+                .is_some_and(|id| id.starts_with("UC"))
+        );
+        assert_eq!(
+            first.watched_at,
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-30T13:02:29Z")
+                    .expect("시각")
+                    .with_timezone(&Utc)
+            ),
+            "KST를 UTC로 변환한다"
+        );
+        assert!(!first.is_ad);
+
+        assert!(entries[1].is_ad, "Google Ads 항목");
+        assert_eq!(entries[2].video_id, None, "삭제된 영상");
+        assert_eq!(entries[3].header, "YouTube Music");
+        assert_eq!(entries[3].title, "영상 & 노래 E", "HTML 엔티티 복원");
+    }
+
+    #[test]
+    fn parse_html_time_handles_meridiem() {
+        assert_eq!(
+            parse_html_time("Oct 28, 2026, 9:00:00 AM KST"),
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-28T00:00:00Z")
+                    .expect("시각")
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(
+            parse_html_time("Oct 28, 2026, 12:00:00 AM UTC"),
+            Some(
+                DateTime::parse_from_rfc3339("2026-10-28T00:00:00Z")
+                    .expect("시각")
+                    .with_timezone(&Utc)
+            )
+        );
+        assert_eq!(parse_html_time("not a time"), None);
     }
 
     #[test]
