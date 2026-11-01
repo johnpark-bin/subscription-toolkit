@@ -129,6 +129,17 @@ impl PlaylistCopyReport {
     }
 }
 
+/// 재생목록 최대 크기 오류인지 확인한다.
+pub fn is_playlist_full(body: &str) -> bool {
+    [
+        "최대 재생목록 크기를 초과",
+        "maximum playlist size",
+        "FAILED_PRECONDITION",
+    ]
+    .iter()
+    .any(|marker| body.contains(marker))
+}
+
 async fn refresh_page(cdp: &mut CdpClient) -> Result<(), AppError> {
     cdp.navigate(page::YOUTUBE_URL)
         .await
@@ -150,6 +161,8 @@ pub struct HistoryPlaylistReport {
     pub items_added: u64,
     /// 상한으로 잘라낸 항목 수.
     pub truncated: usize,
+    /// 대상 재생목록이 최대 크기에 도달했는지 여부.
+    pub playlist_full: bool,
 }
 
 impl HistoryPlaylistReport {
@@ -167,6 +180,9 @@ impl HistoryPlaylistReport {
             out.push_str(&format!(" · 잘림 {}", self.truncated));
         }
         out.push('\n');
+        if self.playlist_full {
+            out.push_str("재생목록이 최대 크기에 도달해 남은 항목은 넣지 못했습니다.\n");
+        }
         out
     }
 }
@@ -264,6 +280,9 @@ pub async fn copy_history_playlist(
             report.items_added += 1;
         } else if response.body.contains("already") {
             continue;
+        } else if is_playlist_full(&response.body) {
+            report.playlist_full = true;
+            break;
         } else {
             return Err(failure(&format!("history:{video_id}"), &response));
         }
@@ -360,6 +379,15 @@ pub async fn copy_missing_playlists(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_playlist_full_message() {
+        assert!(is_playlist_full(
+            r#"{"error":{"message":"최대 재생목록 크기를 초과했습니다.","status":"FAILED_PRECONDITION"}}"#
+        ));
+        assert!(is_playlist_full("Maximum playlist size exceeded"));
+        assert!(!is_playlist_full(r#"{"status":"STATUS_SUCCEEDED"}"#));
+    }
 
     #[test]
     fn report_renders_korean_counts() {
