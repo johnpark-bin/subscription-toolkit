@@ -30,7 +30,8 @@
 | [준비 절차](../setup.md) | Google Cloud와 OAuth, Takeout 준비 (YouTube 기준) |
 | [이전 요구사항](../youtube-migration-requirements.md) | 이전 범위, 쿼터 계산, 보관·오류·재개 정책 (YouTube 기준) |
 | [무인 반복 실행](../automation.md) | 하루 예산으로 여러 날 실행하는 스케줄러 설정 |
-| [README](../../README.md) | 설치, 명령 요약, 종료 코드, 데이터 파일 위치 |
+| [사용법](../usage.md) | 전체 명령, 종료 코드, 쿼터·재개, 데이터 파일 위치 |
+| [README](../../README.md) | 프로젝트 소개, 설치, 구조, 문서 진입점 |
 
 ## 참고 링크
 
